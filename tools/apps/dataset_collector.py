@@ -28,7 +28,7 @@ registered to the OSS catalog server.
 
 Run it with::
 
-    pixi run python tools/apps/serve_rerun_control.py
+    pixi run dataset-collector
 
 then open http://localhost:8000
 """
@@ -54,6 +54,8 @@ import tyro
 os.environ.setdefault("RERUN_INSECURE_SKIP_HOST_CHECK", "1")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# TODO(calude): make these into command line args
 APP_ID = "so-100"
 DATASET_NAME = "recordings"
 

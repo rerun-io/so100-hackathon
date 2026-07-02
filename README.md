@@ -102,6 +102,15 @@ Safety, since teleop turns the follower's torque ON:
 - `--max-relative-target 5` additionally caps each per-tick goal change to ±5° (off by
   default, matching lerobot)
 
+## Collect a dataset
+
+A browser-based collector that records takes to disk and registers them in a local Rerun
+catalog:
+
+```bash
+pixi run dataset-collector   # then open http://localhost:8000
+```
+
 ## Development
 
 ```bash

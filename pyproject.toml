@@ -50,9 +50,9 @@ description = "Typecheck the package"
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 
-[tool.pixi.tasks.serve-rerun-control]
-cmd = "python tools/apps/serve_rerun_control.py"
-description = "Host Rerun proxy + OSS web viewer + OSS catalog + control server; tee recordings to disk and register on stop"
+[tool.pixi.tasks.dataset-collector]
+cmd = "python tools/apps/dataset_collector.py"
+description = "Collect SO-100 datasets: host Rerun proxy + OSS web viewer + OSS catalog + control server; tee recordings to disk and register on stop"
 
 [tool.pixi.tasks.log-so100]
 cmd = "python tools/apps/log_so100.py"
