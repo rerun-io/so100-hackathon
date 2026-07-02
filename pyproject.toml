@@ -14,7 +14,7 @@ packages = ["src/so100_hackathon"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["osx-arm64"]
+platforms = ["osx-arm64", "linux-64"]
 
 [tool.pixi.dependencies]
 python = ">=3.11"
@@ -42,6 +42,19 @@ PIXI_DEV_MODE = "1"
 [tool.pixi.feature.dev.tasks.lint]
 cmd = "ruff check ."
 description = "Lint the package"
+
+# Run first ruff fix, then ruff format, order is important see also https://twitter.com/charliermarsh/status/1717229721954799727
+[tool.pixi.feature.dev.tasks.py-fmt]
+cmd = "ruff check --fix . && ruff format ."
+description = "Format the Python code"
+
+[tool.pixi.feature.dev.tasks.py-fmt-check]
+cmd = "ruff format --check . && ruff check ."
+description = "Check formatting and lints of the Python code"
+
+[tool.pixi.feature.dev.tasks.py-lint]
+cmd = "pyrefly check src tools"
+description = "Typecheck the Python code"
 
 [tool.pixi.feature.dev.tasks.typecheck]
 cmd = "pyrefly check src tools"

@@ -28,6 +28,7 @@ def detect_arm_ports() -> tuple[str, ...]:
 def usb_id_from_port(port: str) -> str:
     return port.rsplit("usbmodem", 1)[-1]
 
+
 # STS3215 control table: write-side registers (teleop drives the follower with these).
 ADDR_MIN_POSITION_LIMIT = 9  # 2 bytes; servo-side motion limit, written from the calibration sweep
 ADDR_MAX_POSITION_LIMIT = 11  # 2 bytes
