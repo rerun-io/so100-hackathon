@@ -16,7 +16,8 @@ and **live** (follows the real arm). Torque is off; move the arm by hand.
 Writes ``calibrations/<usb_id>.json`` in the portugal format that
 ``log-so100`` loads.
 
-    pixi run calibrate-so100 --rr-config.connect [--leader]
+    pixi run calibrate-so100 leader --rr-config.connect
+    pixi run calibrate-so100 follower --rr-config.connect
 """
 
 from __future__ import annotations
@@ -27,9 +28,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import rerun as rr
 import rerun.blueprint as rrb
+import tyro
 
 from so100_hackathon.calibration import DEFAULT_MOTOR_NAMES, MotorCalibration, fallback_calibration, save_calibration
 from so100_hackathon.feetech import TICKS_PER_REV, FeetechBus, detect_arm_ports, usb_id_from_port
@@ -40,32 +43,44 @@ GRIPPER_INDEX = 5
 WRIST_ROLL_INDEX = 4  # full-turn joint: excluded from the sweep, range fixed to 0..4095 (as in lerobot)
 DRIVE_SIGNS = (1, 1, 1, 1, 1, 1)  # standard assembly: raw+ == URDF-positive on every joint
 MIN_SWEEP_TICKS = 300  # ~26 deg; a joint swept less than this probably wasn't moved
+WIGGLE_TICKS = 100  # ~9 deg of joint motion identifies an arm during port selection
 
 
 @dataclass
 class CalibrateConfig:
+    kind: tyro.conf.Positional[Literal["leader", "follower"]]
+    """Which arm this is — required, so leader/follower is always explicit. The leader
+    uses the handle + trigger model, and its gripper sweep is squeeze/release the trigger."""
     rr_config: LiveViewerConfig = field(default_factory=LiveViewerConfig)
     port: str | None = None
-    """Serial port of the arm to calibrate. Default: the single /dev/cu.usbmodem*, or an error listing the options."""
-    leader: bool = False
-    """Calibrate a leader arm (handle + trigger model; the gripper sweep is squeeze/release the trigger)."""
+    """Serial port of the arm to calibrate. Default: the single plugged-in arm; with
+    several plugged in, wiggle a joint on the one you want and it's picked automatically."""
     calibration_dir: Path = Path("calibrations")
 
 
 class _LiveArmFeed:
-    """Background thread: read the bus, animate the 'live' URDF ghost, track min/max."""
+    """Background thread: read the bus, track min/max, and (once a homing exists)
+    animate a 'live' URDF ghost.
 
-    def __init__(self, bus: FeetechBus, urdf: UrdfArm) -> None:
+    The ghost is only attached after the middle pose is captured — before that
+    there is no valid raw->angle mapping and a mismatched model just confuses.
+    """
+
+    def __init__(self, bus: FeetechBus) -> None:
         self.bus = bus
-        self.urdf = urdf
+        self.urdf: UrdfArm | None = None
+        self._display_calibration: list[MotorCalibration] | None = None
         self.latest_raw: list[int] | None = None
         self.reset_ranges()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="live-arm", daemon=True)
         self._thread.start()
 
+    def attach_urdf(self, urdf: UrdfArm, calibration: list[MotorCalibration]) -> None:
+        self._display_calibration = calibration
+        self.urdf = urdf
+
     def _run(self) -> None:
-        fallback = fallback_calibration()
         failures = 0
         while not self._stop.is_set():
             try:
@@ -81,8 +96,10 @@ class _LiveArmFeed:
             self.latest_raw = raw
             self.range_min = [min(lo, r) for lo, r in zip(self.range_min, raw, strict=True)]
             self.range_max = [max(hi, r) for hi, r in zip(self.range_max, raw, strict=True)]
-            rr.set_time("time", timestamp=time.time())
-            self.urdf.log_joints([calib.calibrated_from_raw(r) for calib, r in zip(fallback, raw, strict=True)])
+            urdf, display = self.urdf, self._display_calibration
+            if urdf is not None and display is not None:
+                rr.set_time("time", timestamp=time.time())
+                urdf.log_joints([calib.calibrated_from_raw(r) for calib, r in zip(display, raw, strict=True)])
             time.sleep(1.0 / 20.0)
 
     def capture(self) -> list[int]:
@@ -114,39 +131,61 @@ def _sweep_until_enter(feed: _LiveArmFeed) -> None:
         print(f"\x1b[{n_lines}A", end="")  # move cursor up to overwrite the table
 
 
+def _pick_arm_by_wiggle(ports: tuple[str, ...]) -> str:
+    """Several arms are plugged in: identify one physically instead of by port name."""
+    buses = {port: FeetechBus(port) for port in ports}
+    try:
+        baselines: dict[str, list[int]] = {}
+        print(f"{len(ports)} arms found — WIGGLE any joint on the arm you want to calibrate...", flush=True)
+        while True:
+            for port, bus in buses.items():
+                try:
+                    positions = [t.position_raw for t in bus.read_telemetry()]
+                except RuntimeError:
+                    continue
+                if port not in baselines:
+                    baselines[port] = positions
+                elif any(abs(now - then) > WIGGLE_TICKS for now, then in zip(positions, baselines[port], strict=True)):
+                    print(f"detected movement on {port}", flush=True)
+                    return port
+            time.sleep(0.05)
+    finally:
+        for bus in buses.values():
+            bus.close()
+
+
 def main(config: CalibrateConfig) -> None:
     ports = (config.port,) if config.port else detect_arm_ports()
     if not ports:
         raise SystemExit("no SO-100 arms found (no /dev/cu.usbmodem* ports); pass --port explicitly")
-    if len(ports) > 1:
-        listing = "\n  ".join(ports)
-        raise SystemExit(f"multiple arms plugged in, pick one with --port:\n  {listing}")
-    port = ports[0]
+    port = ports[0] if len(ports) == 1 else _pick_arm_by_wiggle(ports)
     usb_id = usb_id_from_port(port)
     out_path = config.calibration_dir / f"{usb_id}.json"
 
-    placeholder = fallback_calibration()
-    urdf_path = LEADER_URDF_PATH if config.leader else FOLLOWER_URDF_PATH
-    target = UrdfArm.create("target", placeholder, urdf_path=urdf_path, translation=(0.0, 0.0, 0.0), color=(0.5, 0.5, 0.5))
-    live = UrdfArm.create("live", placeholder, urdf_path=urdf_path, translation=(0.4, 0.0, 0.0), color=MATTE_BLACK)
-    rr.send_blueprint(
-        rrb.Blueprint(
-            rrb.Spatial3DView(
-                name="calibration",
-                origin="/",
-                overrides={arm.collision_geometries_path: rrb.EntityBehavior(visible=False) for arm in (target, live)},
+    is_leader = config.kind == "leader"
+    urdf_path = LEADER_URDF_PATH if is_leader else FOLLOWER_URDF_PATH
+    target = UrdfArm.create("target", fallback_calibration(), urdf_path=urdf_path, translation=(0.0, 0.0, 0.0), color=(0.5, 0.5, 0.5))
+
+    def send_view(*arms: UrdfArm) -> None:
+        rr.send_blueprint(
+            rrb.Blueprint(
+                rrb.Spatial3DView(
+                    name="calibration",
+                    origin="/",
+                    overrides={arm.collision_geometries_path: rrb.EntityBehavior(visible=False) for arm in arms},
+                ),
+                collapse_panels=True,
             ),
-            collapse_panels=True,
-        ),
-        make_active=True,
-    )
+            make_active=True,
+        )
 
+    send_view(target)
     bus = FeetechBus(port)
-    feed = _LiveArmFeed(bus, live)
+    feed = _LiveArmFeed(bus)
+    half_rev = TICKS_PER_REV // 2  # ticks per 180 deg, so calibrated values come out in degrees
 
-    kind = "leader" if config.leader else "follower"
-    print(f"\ncalibrating {kind} {usb_id} on {port} -> {out_path}")
-    print("in the viewer: GRAY arm = target pose, the other arm = live view of your arm\n")
+    print(f"\ncalibrating {config.kind} {usb_id} on {port} -> {out_path}")
+    print("in the viewer: GRAY arm = the target pose to match (a live model appears after step 1)\n")
     try:
         rr.set_time("time", timestamp=time.time())
         target.log_pose(list(target.center_angles_rad))
@@ -154,7 +193,18 @@ def main(config: CalibrateConfig) -> None:
         raw_middle = feed.capture()
         feed.reset_ranges()
 
-        grip = "squeeze/release the trigger fully" if config.leader else "fully close and open the gripper"
+        # From here the homing is known, so a live model is trustworthy: show it
+        # mirroring the real arm (also instantly reveals any mirrored joint).
+        display = [
+            MotorCalibration(motor_name=name, homing_offset=0, start_pos=raw_middle[i], end_pos=raw_middle[i] + DRIVE_SIGNS[i] * half_rev, calib_mode="DEGREE")
+            for i, name in enumerate(DEFAULT_MOTOR_NAMES)
+        ]
+        live = UrdfArm.create("live", display, urdf_path=urdf_path, translation=(0.0, -0.4, 0.0), color=MATTE_BLACK)
+        feed.attach_urdf(live, display)
+        send_view(target, live)
+        print("     middle pose captured — the black model now mirrors your arm live")
+
+        grip = "squeeze/release the trigger fully" if is_leader else "fully close and open the gripper"
         print(f"2/2  move every joint EXCEPT wrist_roll through its full range of motion ({grip} too).")
         print("     recording positions — press Enter to stop...")
         _sweep_until_enter(feed)
@@ -165,7 +215,6 @@ def main(config: CalibrateConfig) -> None:
         bus.close()
 
     calibration: list[MotorCalibration] = []
-    half_rev = TICKS_PER_REV // 2  # ticks per 180 deg, so calibrated values come out in degrees
     for i, name in enumerate(DEFAULT_MOTOR_NAMES):
         span = range_max[i] - range_min[i]
         span_deg = span * 360.0 / TICKS_PER_REV
@@ -189,5 +238,5 @@ def main(config: CalibrateConfig) -> None:
         )
         print(f"{name}: middle={raw_middle[i]} range=[{range_min[i]}, {range_max[i]}] (span {span_deg:.0f} deg)")
 
-    save_calibration(out_path, calibration, kind=kind, range_min=range_min, range_max=range_max)
+    save_calibration(out_path, calibration, kind=config.kind, range_min=range_min, range_max=range_max)
     print(f"\nwrote {out_path} — verify with: pixi run log-so100")
