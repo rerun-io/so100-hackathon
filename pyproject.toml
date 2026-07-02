@@ -27,6 +27,7 @@ py-opencv = "*"
 [tool.pixi.pypi-dependencies]
 so100_hackathon = { path = ".", editable = true }
 feetech-servo-sdk = ">=1.0.0"
+datafusion = ">=52,<53"
 
 [tool.pixi.feature.dev.dependencies]
 ruff = "*"
@@ -53,6 +54,10 @@ description = "Find dead code in the package"
 [tool.pixi.environments]
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
+
+[tool.pixi.tasks.dataset-collector]
+cmd = "python tools/apps/dataset_collector.py"
+description = "Collect SO-100 datasets: host Rerun proxy + OSS web viewer + OSS catalog + control server; tee recordings to disk and register on stop"
 
 [tool.pixi.tasks.log-so100]
 cmd = "python tools/apps/log_so100.py"
