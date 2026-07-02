@@ -40,13 +40,15 @@ GRIPPER_INDEX = 5
 WRIST_ROLL_INDEX = 4  # full-turn joint: excluded from the sweep, range fixed to 0..4095 (as in lerobot)
 DRIVE_SIGNS = (1, 1, 1, 1, 1, 1)  # standard assembly: raw+ == URDF-positive on every joint
 MIN_SWEEP_TICKS = 300  # ~26 deg; a joint swept less than this probably wasn't moved
+WIGGLE_TICKS = 100  # ~9 deg of joint motion identifies an arm during port selection
 
 
 @dataclass
 class CalibrateConfig:
     rr_config: LiveViewerConfig = field(default_factory=LiveViewerConfig)
     port: str | None = None
-    """Serial port of the arm to calibrate. Default: the single /dev/cu.usbmodem*, or an error listing the options."""
+    """Serial port of the arm to calibrate. Default: the single plugged-in arm; with
+    several plugged in, wiggle a joint on the one you want and it's picked automatically."""
     leader: bool = False
     """Calibrate a leader arm (handle + trigger model; the gripper sweep is squeeze/release the trigger)."""
     calibration_dir: Path = Path("calibrations")
@@ -114,14 +116,34 @@ def _sweep_until_enter(feed: _LiveArmFeed) -> None:
         print(f"\x1b[{n_lines}A", end="")  # move cursor up to overwrite the table
 
 
+def _pick_arm_by_wiggle(ports: tuple[str, ...]) -> str:
+    """Several arms are plugged in: identify one physically instead of by port name."""
+    buses = {port: FeetechBus(port) for port in ports}
+    try:
+        baselines: dict[str, list[int]] = {}
+        print(f"{len(ports)} arms found — WIGGLE any joint on the arm you want to calibrate...", flush=True)
+        while True:
+            for port, bus in buses.items():
+                try:
+                    positions = [t.position_raw for t in bus.read_telemetry()]
+                except RuntimeError:
+                    continue
+                if port not in baselines:
+                    baselines[port] = positions
+                elif any(abs(now - then) > WIGGLE_TICKS for now, then in zip(positions, baselines[port], strict=True)):
+                    print(f"detected movement on {port}", flush=True)
+                    return port
+            time.sleep(0.05)
+    finally:
+        for bus in buses.values():
+            bus.close()
+
+
 def main(config: CalibrateConfig) -> None:
     ports = (config.port,) if config.port else detect_arm_ports()
     if not ports:
         raise SystemExit("no SO-100 arms found (no /dev/cu.usbmodem* ports); pass --port explicitly")
-    if len(ports) > 1:
-        listing = "\n  ".join(ports)
-        raise SystemExit(f"multiple arms plugged in, pick one with --port:\n  {listing}")
-    port = ports[0]
+    port = ports[0] if len(ports) == 1 else _pick_arm_by_wiggle(ports)
     usb_id = usb_id_from_port(port)
     out_path = config.calibration_dir / f"{usb_id}.json"
 

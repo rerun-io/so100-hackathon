@@ -44,9 +44,13 @@ Calibration follows the standard lerobot procedure (`lerobot-calibrate`), one ar
 in either order — each arm's calibration is independent, keyed by its USB id:
 
 ```bash
-pixi run calibrate-so100 --rr-config.connect --port /dev/cu.usbmodem<LEADER_ID> --leader
-pixi run calibrate-so100 --rr-config.connect --port /dev/cu.usbmodem<FOLLOWER_ID>
+pixi run calibrate-so100 --rr-config.connect --leader   # then wiggle the LEADER arm
+pixi run calibrate-so100 --rr-config.connect            # then wiggle the follower arm
 ```
+
+With several arms plugged in, the tool asks you to **wiggle a joint on the arm you want**
+and selects its port automatically (no need to know which `/dev/cu.usbmodem*` is which;
+`--port` still works as an override).
 
 The viewer shows two URDF arms: **gray = target pose**, the other (black leader / white
 follower) = live view of your arm. Torque is off, so you can move the arm freely by hand.
