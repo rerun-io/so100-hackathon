@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 MOTOR_COUNT = 6
+TICKS_PER_REV = 4096  # STS3215 position resolution; raw tick domain is 0..TICKS_PER_REV-1
 
 DEFAULT_MOTOR_NAMES: tuple[str, ...] = (
     "shoulder_pan",
@@ -41,6 +42,16 @@ class MotorCalibration:
         pos = (raw_homed - float(self.start_pos)) / float(self.end_pos - self.start_pos)
         return pos * 180.0 if self.calib_mode == "DEGREE" else pos * 100.0
 
+    def raw_from_calibrated(self, calibrated: float) -> int:
+        """Inverse of ``calibrated_from_raw``, clamped to the servo's 0..4095 tick range.
+
+        Teleop passes leader values through here with the FOLLOWER's calibration, which is
+        how per-arm homing offsets and range differences cancel out (as in portugal/lerobot).
+        """
+        pos = calibrated / (180.0 if self.calib_mode == "DEGREE" else 100.0)
+        raw = pos * float(self.end_pos - self.start_pos) + float(self.start_pos) + float(self.homing_offset)
+        return min(max(round(raw), 0), TICKS_PER_REV - 1)
+
 
 def load_calibration(path: Path) -> list[MotorCalibration]:
     raw = json.loads(path.read_text())
@@ -62,6 +73,21 @@ def load_arm_kind(path: Path) -> str | None:
         return None
     kind = json.loads(path.read_text()).get("kind")
     return kind if isinstance(kind, str) else None
+
+
+def load_arm_ranges(path: Path) -> tuple[list[int], list[int]] | None:
+    """Read the recorded range-of-motion sweep (raw ticks) from a calibration JSON, if present.
+
+    Written by ``calibrate-so100``; teleop clamps follower goals to this range so the
+    follower is never commanded past the physical limits found during calibration.
+    """
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text())
+    range_min, range_max = data.get("range_min"), data.get("range_max")
+    if not isinstance(range_min, list) or not isinstance(range_max, list) or len(range_min) != MOTOR_COUNT or len(range_max) != MOTOR_COUNT:
+        return None
+    return [int(v) for v in range_min], [int(v) for v in range_max]
 
 
 def save_calibration(
@@ -98,6 +124,6 @@ def save_calibration(
 def fallback_calibration() -> list[MotorCalibration]:
     """Uncalibrated arms: map raw ticks to degrees centered on 2048 ((raw - 2048) * 360 / 4096)."""
     return [
-        MotorCalibration(motor_name=name, homing_offset=0, start_pos=2048, end_pos=4096, calib_mode="DEGREE")
+        MotorCalibration(motor_name=name, homing_offset=0, start_pos=TICKS_PER_REV // 2, end_pos=TICKS_PER_REV, calib_mode="DEGREE")
         for name in DEFAULT_MOTOR_NAMES
     ]

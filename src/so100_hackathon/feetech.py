@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import contextlib
 import glob
+import time
 from dataclasses import dataclass
 
 import scservo_sdk as scs
 
 BAUD_RATE = 1_000_000
 PROTOCOL_END = 0  # STS/SMS series byte order
-TICKS_PER_REV = 4096
 
 
 def detect_arm_ports() -> tuple[str, ...]:
@@ -26,6 +26,19 @@ def detect_arm_ports() -> tuple[str, ...]:
 
 def usb_id_from_port(port: str) -> str:
     return port.rsplit("usbmodem", 1)[-1]
+
+# STS3215 control table: write-side registers (teleop drives the follower with these).
+ADDR_MAX_TORQUE_LIMIT = 16  # 2 bytes, 0..1000 (0.1% units)
+ADDR_P_COEFFICIENT = 21  # 1 byte, position-loop P gain (servo default 32)
+ADDR_D_COEFFICIENT = 22  # 1 byte
+ADDR_I_COEFFICIENT = 23  # 1 byte
+ADDR_PROTECTION_CURRENT = 28  # 2 bytes, 6.5 mA units
+ADDR_OVERLOAD_TORQUE = 36  # 1 byte, % of torque kept once overload protection trips
+ADDR_TORQUE_ENABLE = 40  # 1 byte, 0/1
+ADDR_GOAL_POSITION = 42  # 2 bytes, ticks
+ADDR_LOCK = 55  # 1 byte; lerobot toggles it together with torque
+
+GRIPPER_MOTOR_ID = 6
 
 # STS3215 control table: contiguous block covering every Present_* register.
 ADDR_PRESENT_POSITION = 56  # 2 bytes, ticks (0..4095)
@@ -69,6 +82,7 @@ class FeetechBus:
         self.sync_read = scs.GroupSyncRead(self.port_handler, self.packet_handler, BLOCK_START, BLOCK_LENGTH)
         for motor_id in self.motor_ids:
             self.sync_read.addParam(motor_id)
+        self.sync_write = scs.GroupSyncWrite(self.port_handler, self.packet_handler, ADDR_GOAL_POSITION, 2)
 
     def reconnect(self) -> None:
         """Reopen the serial port after a USB drop (device must be plugged back in)."""
@@ -100,5 +114,72 @@ class FeetechBus:
             )
         return telemetry
 
+    def _write_register(self, motor_id: int, address: int, value: int, size: int, *, attempts: int = 3) -> None:
+        write = self.packet_handler.write1ByteTxRx if size == 1 else self.packet_handler.write2ByteTxRx
+        comm, error = scs.COMM_TX_FAIL, 0
+        for attempt in range(attempts):
+            try:
+                comm, error = write(self.port_handler, motor_id, address, value)
+            except OSError as os_error:
+                raise RuntimeError(f"{self.port}: bus write failed (device disconnected?): {os_error}") from os_error
+            if comm == scs.COMM_SUCCESS and error == 0:
+                return
+            # EEPROM commits (e.g. the gain registers) can delay the servo's status reply
+            # past the packet timeout even though the write landed; settle and retry.
+            if attempt < attempts - 1:
+                time.sleep(0.01)
+        if comm != scs.COMM_SUCCESS:
+            raise RuntimeError(f"{self.port}: write to motor {motor_id} addr {address} failed: {self.packet_handler.getTxRxResult(comm)}")
+        raise RuntimeError(f"{self.port}: motor {motor_id} rejected write to addr {address}: {self.packet_handler.getRxPacketError(error)}")
+
+    def set_torque(self, enabled: bool) -> None:
+        """Enable/disable torque on every motor (Lock toggled alongside, as lerobot does).
+
+        Disabling is best-effort across ALL motors before raising: a transient failure on
+        one servo must not leave the ones after it torqued (this runs on the exit path).
+        """
+        value = 1 if enabled else 0
+        failures: list[str] = []
+        for motor_id in self.motor_ids:
+            try:
+                self._write_register(motor_id, ADDR_TORQUE_ENABLE, value, 1)
+                self._write_register(motor_id, ADDR_LOCK, value, 1)
+            except RuntimeError as error:
+                if enabled:
+                    raise
+                failures.append(str(error))
+        if failures:
+            raise RuntimeError(f"{self.port}: torque disable failed on {len(failures)} motor(s): {failures[0]}")
+
+    def configure_follower_control(self) -> None:
+        """Configure the servos the way lerobot's SO follower does. Call while torque is off.
+
+        P=16 (vs default 32) avoids shakiness; I=0/D=32 are the servo defaults. The gripper
+        additionally gets torque/current limits: closing on an object makes its goal
+        unreachable, and without limits the servo stalls at full torque and can burn out.
+        """
+        for motor_id in self.motor_ids:
+            self._write_register(motor_id, ADDR_P_COEFFICIENT, 16, 1)
+            self._write_register(motor_id, ADDR_I_COEFFICIENT, 0, 1)
+            self._write_register(motor_id, ADDR_D_COEFFICIENT, 32, 1)
+        if GRIPPER_MOTOR_ID in self.motor_ids:
+            self._write_register(GRIPPER_MOTOR_ID, ADDR_MAX_TORQUE_LIMIT, 500, 2)  # 50% max torque
+            self._write_register(GRIPPER_MOTOR_ID, ADDR_PROTECTION_CURRENT, 250, 2)  # ~1.6 A
+            self._write_register(GRIPPER_MOTOR_ID, ADDR_OVERLOAD_TORQUE, 25, 1)  # 25% torque when overloaded
+
+    def sync_write_goal(self, positions: list[int]) -> None:
+        """One Goal_Position sync-write for all motors (fire-and-forget, servos send no reply)."""
+        self.sync_write.clearParam()
+        for motor_id, position in zip(self.motor_ids, positions, strict=True):
+            self.sync_write.addParam(motor_id, [scs.SCS_LOBYTE(position), scs.SCS_HIBYTE(position)])
+        try:
+            comm = self.sync_write.txPacket()
+        except OSError as error:
+            raise RuntimeError(f"{self.port}: goal sync write failed (device disconnected?): {error}") from error
+        if comm != scs.COMM_SUCCESS:
+            raise RuntimeError(f"{self.port}: goal sync write failed: {self.packet_handler.getTxRxResult(comm)}")
+
     def close(self) -> None:
-        self.port_handler.closePort()
+        # A half-open handler (failed reconnect) has ser=None; closePort() would AttributeError.
+        if self.port_handler.is_open:
+            self.port_handler.closePort()

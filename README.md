@@ -76,6 +76,32 @@ vantage point, pass `--arm-spacing -0.4`. Verify by moving the arms and checking
 mirror them; positions in the plots are now physical degrees relative to the middle pose
 (gripper/trigger: 0-100%).
 
+## Teleoperate
+
+Once both arms are calibrated, the follower can mirror the leader (same scheme as
+portugal's `follow.rs` and `lerobot-teleoperate`: leader positions normalized through its
+calibration, denormalized through the follower's, written as `Goal_Position` — no IK):
+
+```bash
+pixi run teleop-so100                          # log-so100 --teleop --fps 60
+pixi run teleop-so100 --rr-config.connect      # stream into an already-open viewer
+```
+
+Move the leader by hand; the follower tracks it. Everything from `log-so100` still runs
+(telemetry, URDFs, cameras), plus the commanded pose is plotted as `<follower>/goal` on
+top of the measured position, so tracking lag is directly visible.
+
+Safety, since teleop turns the follower's torque ON:
+
+- goals are clamped to the follower's recorded range-of-motion sweep, so it can't be
+  commanded past the limits found during calibration
+- on start the follower **glides** to the leader's pose over ~1.5 s instead of jumping —
+  still, roughly match the arm poses before starting
+- torque is released on exit (Ctrl-C included); if the leader disconnects mid-run the
+  follower simply holds its last pose until the leader is back
+- `--max-relative-target 5` additionally caps each per-tick goal change to ±5° (off by
+  default, matching lerobot)
+
 ## Development
 
 ```bash

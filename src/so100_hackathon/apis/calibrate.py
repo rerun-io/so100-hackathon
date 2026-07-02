@@ -34,8 +34,8 @@ import rerun as rr
 import rerun.blueprint as rrb
 import tyro
 
-from so100_hackathon.calibration import DEFAULT_MOTOR_NAMES, MotorCalibration, fallback_calibration, save_calibration
-from so100_hackathon.feetech import TICKS_PER_REV, FeetechBus, detect_arm_ports, usb_id_from_port
+from so100_hackathon.calibration import DEFAULT_MOTOR_NAMES, TICKS_PER_REV, MotorCalibration, fallback_calibration, save_calibration
+from so100_hackathon.feetech import FeetechBus, detect_arm_ports, usb_id_from_port
 from so100_hackathon.rerun_config import LiveViewerConfig
 from so100_hackathon.urdf_arm import FOLLOWER_URDF_PATH, LEADER_URDF_PATH, MATTE_BLACK, UrdfArm
 

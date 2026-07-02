@@ -40,6 +40,16 @@ MODEL_CORRECTIONS: dict[str, tuple[tuple[float, float, float], tuple[float, floa
     LEADER_URDF_PATH.name: ((0.0, 0.0, 0.0), (0.1242, 0.1681, -0.0301)),
 }
 
+# Per-joint display sign for calibrated DEGREE values. The two models define opposite
+# positive directions for shoulder_pan (leader pan axis -z in world, follower +z; the other
+# joints agree — FK over both URDFs), while calibrated values are physically consistent
+# across arms (raw+ pans both real arms the same way; teleop passthrough relies on that).
+# The leader model matches the real arms' convention, so the follower model flips pan.
+JOINT_DISPLAY_SIGNS: dict[str, tuple[float, float, float, float, float, float]] = {
+    FOLLOWER_URDF_PATH.name: (-1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+    LEADER_URDF_PATH.name: (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+}
+
 
 def _rpy_matrix(roll_deg: float, pitch_deg: float, yaw_deg: float) -> list[list[float]]:
     roll, pitch, yaw = (math.radians(v) for v in (roll_deg, pitch_deg, yaw_deg))
@@ -58,6 +68,8 @@ class UrdfArm:
     calib_modes: list[CalibMode]
     center_angles_rad: list[float]
     """URDF joint angle at calibrated 0 deg (the calibration reference pose)."""
+    joint_signs: tuple[float, float, float, float, float, float]
+    """Display sign per joint (see JOINT_DISPLAY_SIGNS)."""
     collision_geometries_path: str
     """Entity path of this model's collision meshes (for hiding in blueprints)."""
 
@@ -104,6 +116,7 @@ class UrdfArm:
             joints=joints,
             calib_modes=[calib.calib_mode for calib in calibration],
             center_angles_rad=center_angles_rad,
+            joint_signs=JOINT_DISPLAY_SIGNS[urdf_path.name],
             collision_geometries_path=f"{name}/{tree.name}/collision_geometries",
         )
 
@@ -113,7 +126,7 @@ class UrdfArm:
         if self.calib_modes[joint_index] == "LINEAR":
             angle = joint.limit_lower + calibrated / 100.0 * (joint.limit_upper - joint.limit_lower)
         else:
-            angle = self.center_angles_rad[joint_index] + math.radians(calibrated)
+            angle = self.center_angles_rad[joint_index] + self.joint_signs[joint_index] * math.radians(calibrated)
         # Clamp ourselves: compute_transform(clamp=True) warns on every out-of-limit
         # angle, which floods stdout on uncalibrated arms.
         return min(max(angle, joint.limit_lower), joint.limit_upper)

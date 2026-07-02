@@ -57,6 +57,10 @@ description = "Stream live SO-100 arm telemetry into a Rerun viewer"
 cmd = "python tools/apps/calibrate_so100.py"
 description = "Guided SO-100 calibration (match target poses shown in the viewer)"
 
+[tool.pixi.tasks.teleop-so100]
+cmd = "python tools/apps/log_so100.py --teleop --fps 60"
+description = "Teleoperate: the follower arm mirrors the leader (torque ON), with full logging"
+
 [tool.ruff]
 line-length = 150
 extend-exclude = [".pixi"]

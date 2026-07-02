@@ -23,7 +23,7 @@ from pathlib import Path
 import rerun as rr
 
 from so100_hackathon.blueprint import create_blueprint
-from so100_hackathon.calibration import MotorCalibration, fallback_calibration, load_arm_kind, load_calibration
+from so100_hackathon.calibration import MotorCalibration, fallback_calibration, load_arm_kind, load_arm_ranges, load_calibration
 from so100_hackathon.cameras import CameraStreamer, detect_camera_indices
 from so100_hackathon.feetech import FeetechBus, MotorTelemetry, detect_arm_ports, usb_id_from_port
 from so100_hackathon.rerun_config import LiveViewerConfig
@@ -40,6 +40,9 @@ METRICS: dict[str, str] = {
 }
 METRIC_SUBPATHS = ("position", *METRICS)
 
+TELEOP_RAMP_SECONDS = 1.5
+"""On teleop start the follower glides to the leader's pose over this long, instead of jumping."""
+
 
 @dataclass
 class Arm:
@@ -49,6 +52,13 @@ class Arm:
     urdf: UrdfArm | None = None
     errors: int = 0
     """Consecutive bus-read failures (reset on the first successful read)."""
+    is_leader: bool = False
+    calibrated: bool = False
+    """True when a real calibration file was loaded (teleop refuses to run on fallbacks)."""
+    ranges: tuple[list[int], list[int]] | None = None
+    """Raw-tick (min, max) per motor from the calibration sweep; teleop clamps goals to it."""
+    last_calibrated: list[float] | None = None
+    """Calibrated positions from the most recent successful read (this frame's, once read)."""
 
 
 @dataclass
@@ -57,6 +67,8 @@ class _ResolvedArm:
     name: str
     calibration: list[MotorCalibration]
     is_leader: bool | None
+    calibrated: bool
+    ranges: tuple[list[int], list[int]] | None
 
 
 @dataclass
@@ -88,6 +100,13 @@ class LogArmsConfig:
     """Camera indices to stream. Default: probe indices 0-4 and use whatever responds. Pass --cameras (empty) to disable."""
     jpeg_quality: int = 75
     """JPEG quality for camera frames."""
+    teleop: bool = False
+    """Drive the follower to mirror the leader (torque ON on the follower). Leader positions
+    pass through both arms' calibrations, so both arms must be calibrated. Goals are clamped
+    to the follower's swept range; Ctrl-C (or any exit) releases the follower's torque."""
+    max_relative_target: float | None = None
+    """Teleop safety clamp: max change of any follower goal per tick, in calibrated units
+    (degrees; % for the gripper). Default: no clamp, like lerobot."""
 
 
 def _open_arms(config: LogArmsConfig) -> list[Arm]:
@@ -104,16 +123,27 @@ def _open_arms(config: LogArmsConfig) -> list[Arm]:
         calibration_path = config.calibration_dir / f"{usb_id}.json"
         try:
             calibration = load_calibration(calibration_path)
+            calibrated = True
             print(f"{name}: {port} (calibration {calibration_path})", flush=True)
         except (FileNotFoundError, KeyError):  # missing, or a kind-only stub
             calibration = fallback_calibration()
+            calibrated = False
             print(f"{name}: {port} (no calibration in {calibration_path}, using raw-centered degrees)", flush=True)
         if config.leader is not None:
             is_leader: bool | None = config.leader in (usb_id, name)
         else:
             kind = load_arm_kind(calibration_path)
             is_leader = None if kind is None else kind == "leader"
-        resolved.append(_ResolvedArm(port=port, name=name, calibration=calibration, is_leader=is_leader))
+        resolved.append(
+            _ResolvedArm(
+                port=port,
+                name=name,
+                calibration=calibration,
+                is_leader=is_leader,
+                calibrated=calibrated,
+                ranges=load_arm_ranges(calibration_path),
+            )
+        )
 
     # A two-arm rig is one leader + one follower: fill in whichever is unidentified.
     if len(resolved) == 2:
@@ -145,18 +175,52 @@ def _open_arms(config: LogArmsConfig) -> list[Arm]:
                 center_angles_deg=config.joint_offsets_deg,
                 color=MATTE_BLACK,
             )
-        arms.append(Arm(name=res.name, bus=FeetechBus(res.port), calibration=res.calibration, urdf=urdf))
+        arms.append(
+            Arm(
+                name=res.name,
+                bus=FeetechBus(res.port),
+                calibration=res.calibration,
+                urdf=urdf,
+                is_leader=bool(res.is_leader),
+                calibrated=res.calibrated,
+                ranges=res.ranges,
+            )
+        )
     return arms
 
 
 def _log_arm(arm: Arm) -> None:
     telemetry: list[MotorTelemetry] = arm.bus.read_telemetry()
     calibrated = [calib.calibrated_from_raw(t.position_raw) for calib, t in zip(arm.calibration, telemetry, strict=True)]
+    arm.last_calibrated = calibrated
     rr.log(f"{arm.name}/position", rr.Scalars(calibrated))
     for subpath, attr in METRICS.items():
         rr.log(f"{arm.name}/{subpath}", rr.Scalars([float(getattr(t, attr)) for t in telemetry]))
     if arm.urdf is not None:
         arm.urdf.log_joints(calibrated)
+
+
+def _drive_follower(leader: Arm, follower: Arm, *, blend: float, max_step: float | None) -> None:
+    """Mirror the leader: leader calibrated values -> follower raw ticks -> Goal_Position.
+
+    ``blend`` < 1 eases the follower from its own pose toward the leader's (startup ramp);
+    ``max_step`` caps the per-tick goal change (lerobot's max_relative_target). Both work in
+    calibrated space, where the two arms agree by construction.
+    """
+    assert leader.last_calibrated is not None and follower.last_calibrated is not None and follower.ranges is not None
+    range_min, range_max = follower.ranges
+    goals: list[int] = []
+    goals_calibrated: list[float] = []
+    for i, calib in enumerate(follower.calibration):
+        present = follower.last_calibrated[i]
+        target = present + blend * (leader.last_calibrated[i] - present)
+        if max_step is not None:
+            target = min(max(target, present - max_step), present + max_step)
+        raw = min(max(calib.raw_from_calibrated(target), range_min[i]), range_max[i])
+        goals.append(raw)
+        goals_calibrated.append(calib.calibrated_from_raw(raw))
+    follower.bus.sync_write_goal(goals)
+    rr.log(f"{follower.name}/goal", rr.Scalars(goals_calibrated))
 
 
 def main(config: LogArmsConfig) -> None:
@@ -167,6 +231,23 @@ def main(config: LogArmsConfig) -> None:
         motor_names = [calib.motor_name for calib in arm.calibration]
         for subpath in METRIC_SUBPATHS:
             rr.log(f"{arm.name}/{subpath}", rr.SeriesLines(names=motor_names), static=True)
+
+    leader_arm: Arm | None = None
+    follower_arm: Arm | None = None
+    if config.teleop:
+        leader_arm = next((arm for arm in arms if arm.is_leader), None)
+        follower_arm = next((arm for arm in arms if not arm.is_leader), None)
+        if len(arms) != 2 or leader_arm is None or follower_arm is None:
+            raise SystemExit("teleop needs exactly one leader and one follower arm plugged in")
+        if not (leader_arm.calibrated and follower_arm.calibrated):
+            raise SystemExit("teleop needs both arms calibrated (pixi run calibrate-so100 leader / follower)")
+        if follower_arm.ranges is None:
+            raise SystemExit(
+                f"teleop clamps goals to the follower's swept range, but {follower_arm.name}'s calibration "
+                "has no range_min/range_max — re-run: pixi run calibrate-so100 follower"
+            )
+        goal_names = [f"{calib.motor_name} goal" for calib in follower_arm.calibration]
+        rr.log(f"{follower_arm.name}/goal", rr.SeriesLines(names=goal_names), static=True)
 
     camera_indices = detect_camera_indices() if config.cameras is None else config.cameras
     streamers = [CameraStreamer(index, jpeg_quality=config.jpeg_quality) for index in camera_indices]
@@ -190,8 +271,17 @@ def main(config: LogArmsConfig) -> None:
     rate_t0 = time.monotonic()
     max_errors = int(30.0 * config.fps)  # give up after ~30s of continuous failure
     reconnect_every = max(1, int(config.fps))  # attempt a reconnect roughly once a second
+    write_errors = 0
+    teleop_t0: float | None = None  # ramp anchor; None whenever driving is paused, so resuming glides again
     print(f"streaming {len(arms)} arm(s) + {len(streamers)} camera(s) at target {config.fps:.0f} Hz (Ctrl-C to stop)...", flush=True)
     try:
+        if leader_arm is not None and follower_arm is not None:
+            # Arm the follower inside try/finally (and after the slow camera probing above),
+            # so any exit from here on — including Ctrl-C — releases its torque.
+            follower_arm.bus.set_torque(False)
+            follower_arm.bus.configure_follower_control()
+            follower_arm.bus.set_torque(True)
+            print(f"teleop: {follower_arm.name} torque ON, mirroring {leader_arm.name} — Ctrl-C releases it", flush=True)
         while True:
             loop_start = time.monotonic()
             rr.set_time("time", timestamp=time.time())
@@ -199,8 +289,14 @@ def main(config: LogArmsConfig) -> None:
                 # Tolerate transient bus glitches (bad packets, USB drops) per arm, so one
                 # unplugged arm never stalls the others; frame pacing spaces the retries.
                 try:
+                    recovering = arm.errors > 0
                     _log_arm(arm)
                     arm.errors = 0
+                    if recovering and arm is follower_arm:
+                        # A servo power blip resets Torque_Enable, and goal writes are
+                        # fire-and-forget — re-arm, or teleop resumes silently limp.
+                        arm.bus.set_torque(True)
+                        print(f"{arm.name}: recovered — torque re-armed", flush=True)
                 except RuntimeError as error:
                     arm.errors += 1
                     if arm.errors == 1 or arm.errors % reconnect_every == 0:
@@ -213,6 +309,25 @@ def main(config: LogArmsConfig) -> None:
                             print(f"{arm.name}: reconnected", flush=True)
                         except (RuntimeError, OSError):
                             pass  # device still gone; keep retrying
+
+            # Both reads fresh this frame -> send the follower after the leader. A failed
+            # read skips the write, so the follower just holds its last goal (torque stays on).
+            if leader_arm is not None and follower_arm is not None:
+                if leader_arm.errors == 0 and follower_arm.errors == 0:
+                    if teleop_t0 is None:  # first drive, or resuming after a dropout
+                        teleop_t0 = loop_start
+                    blend = min(1.0, (loop_start - teleop_t0) / TELEOP_RAMP_SECONDS)
+                    try:
+                        _drive_follower(leader_arm, follower_arm, blend=blend, max_step=config.max_relative_target)
+                        write_errors = 0
+                    except RuntimeError as error:
+                        write_errors += 1
+                        if write_errors == 1 or write_errors % reconnect_every == 0:
+                            print(f"{follower_arm.name}: goal write failed ({write_errors}): {error}", flush=True)
+                else:
+                    # Driving paused (a bus dropped): restart the ramp on resume, so the
+                    # follower glides to wherever the leader moved meanwhile, not snaps.
+                    teleop_t0 = None
 
             frames += 1
             if loop_start - rate_t0 >= 5.0:
@@ -229,5 +344,11 @@ def main(config: LogArmsConfig) -> None:
     finally:
         for streamer in streamers:
             streamer.stop()
+        if follower_arm is not None:
+            try:
+                follower_arm.bus.set_torque(False)
+                print(f"{follower_arm.name}: torque released", flush=True)
+            except (RuntimeError, OSError) as error:
+                print(f"{follower_arm.name}: FAILED to release torque ({error}) — power-cycle the arm to free it", flush=True)
         for arm in arms:
             arm.bus.close()

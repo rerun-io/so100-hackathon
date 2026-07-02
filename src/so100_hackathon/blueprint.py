@@ -7,7 +7,14 @@ import rerun.blueprint as rrb
 
 def _telemetry_column(name: str, time_ranges: rrb.VisibleTimeRange) -> rrb.Vertical:
     return rrb.Vertical(
-        rrb.TimeSeriesView(name=f"{name} position", origin=f"{name}/position", time_ranges=time_ranges),
+        # <name>/goal only exists in teleop (the commanded follower pose); overlaying it on
+        # the measured position makes tracking lag/error directly visible.
+        rrb.TimeSeriesView(
+            name=f"{name} position",
+            origin=name,
+            contents=["+ $origin/position", "+ $origin/goal"],
+            time_ranges=time_ranges,
+        ),
         rrb.Horizontal(
             rrb.TimeSeriesView(name=f"{name} current (mA)", origin=f"{name}/current", time_ranges=time_ranges),
             rrb.TimeSeriesView(name=f"{name} temperature (C)", origin=f"{name}/temperature", time_ranges=time_ranges),
