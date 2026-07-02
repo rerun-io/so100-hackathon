@@ -28,11 +28,14 @@ def usb_id_from_port(port: str) -> str:
     return port.rsplit("usbmodem", 1)[-1]
 
 # STS3215 control table: write-side registers (teleop drives the follower with these).
+ADDR_MIN_POSITION_LIMIT = 9  # 2 bytes; servo-side motion limit, written from the calibration sweep
+ADDR_MAX_POSITION_LIMIT = 11  # 2 bytes
 ADDR_MAX_TORQUE_LIMIT = 16  # 2 bytes, 0..1000 (0.1% units)
 ADDR_P_COEFFICIENT = 21  # 1 byte, position-loop P gain (servo default 32)
 ADDR_D_COEFFICIENT = 22  # 1 byte
 ADDR_I_COEFFICIENT = 23  # 1 byte
 ADDR_PROTECTION_CURRENT = 28  # 2 bytes, 6.5 mA units
+ADDR_HOMING_OFFSET = 31  # 2 bytes, sign-magnitude (bit 11); present = mechanical - offset (mod 4096)
 ADDR_OVERLOAD_TORQUE = 36  # 1 byte, % of torque kept once overload protection trips
 ADDR_TORQUE_ENABLE = 40  # 1 byte, 0/1
 ADDR_GOAL_POSITION = 42  # 2 bytes, ticks
@@ -64,6 +67,10 @@ class MotorTelemetry:
 def _sign_magnitude(value: int, sign_bit: int) -> int:
     magnitude = value & ((1 << sign_bit) - 1)
     return -magnitude if value & (1 << sign_bit) else magnitude
+
+
+def _encode_sign_magnitude(value: int, sign_bit: int) -> int:
+    return abs(value) | ((1 << sign_bit) if value < 0 else 0)
 
 
 class FeetechBus:
@@ -166,6 +173,20 @@ class FeetechBus:
             self._write_register(GRIPPER_MOTOR_ID, ADDR_MAX_TORQUE_LIMIT, 500, 2)  # 50% max torque
             self._write_register(GRIPPER_MOTOR_ID, ADDR_PROTECTION_CURRENT, 250, 2)  # ~1.6 A
             self._write_register(GRIPPER_MOTOR_ID, ADDR_OVERLOAD_TORQUE, 25, 1)  # 25% torque when overloaded
+
+    def write_homing_offset(self, motor_id: int, offset: int) -> None:
+        """Servo-side homing: present = mechanical - offset (mod 4096), verified on hardware.
+
+        EEPROM register — call with torque off (``set_torque(False)`` also clears Lock).
+        The register is sign-magnitude with 11 magnitude bits, so |offset| caps at 2047.
+        """
+        offset = min(max(offset, -2047), 2047)
+        self._write_register(motor_id, ADDR_HOMING_OFFSET, _encode_sign_magnitude(offset, 11), 2)
+
+    def write_position_limits(self, motor_id: int, range_min: int, range_max: int) -> None:
+        """Servo-side motion limits (EEPROM, torque off) — lerobot writes the swept range here."""
+        self._write_register(motor_id, ADDR_MIN_POSITION_LIMIT, range_min, 2)
+        self._write_register(motor_id, ADDR_MAX_POSITION_LIMIT, range_max, 2)
 
     def sync_write_goal(self, positions: list[int]) -> None:
         """One Goal_Position sync-write for all motors (fire-and-forget, servos send no reply)."""

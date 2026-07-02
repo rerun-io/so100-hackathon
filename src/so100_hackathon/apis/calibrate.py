@@ -2,10 +2,15 @@
 lerobot procedure (``lerobot-calibrate``):
 
 1. Move the arm to the **middle of its range of motion** pose, press Enter.
-   That pose defines 0 deg for every joint (lerobot's "half-turn homing").
+   That pose defines 0 deg for every joint. Like lerobot's "half-turn homing",
+   the offset is written to each servo's Homing_Offset EEPROM register so the
+   middle reads ~2047 ticks — which pushes the 0/4095 tick wrap half a turn
+   away from the whole usable range (software-only offsets can't prevent an
+   unluckily-assembled joint from wrapping mid-sweep).
 2. Move **every joint through its full range of motion** (including fully
    closing and opening the gripper/trigger); min/max are recorded live.
-   Press Enter when done.
+   Press Enter when done. The swept range is also written to the servos'
+   Min/Max_Position_Limit registers (lerobot parity).
 
 Joint directions are NOT calibrated per-arm: like lerobot, they follow the
 standard assembly convention (raw ticks increasing == URDF-positive rotation).
@@ -73,6 +78,7 @@ class _LiveArmFeed:
         self.latest_raw: list[int] | None = None
         self.reset_ranges()
         self._stop = threading.Event()
+        self._paused = threading.Event()
         self._thread = threading.Thread(target=self._run, name="live-arm", daemon=True)
         self._thread.start()
 
@@ -80,9 +86,20 @@ class _LiveArmFeed:
         self._display_calibration = calibration
         self.urdf = urdf
 
+    def pause(self) -> None:
+        """Stop polling so the main thread can use the bus (register writes) without collisions."""
+        self._paused.set()
+        time.sleep(0.2)  # let any in-flight read finish
+
+    def resume(self) -> None:
+        self._paused.clear()
+
     def _run(self) -> None:
         failures = 0
         while not self._stop.is_set():
+            if self._paused.is_set():
+                time.sleep(0.05)
+                continue
             try:
                 telemetry = self.bus.read_telemetry()
             except RuntimeError as error:
@@ -129,6 +146,40 @@ def _sweep_until_enter(feed: _LiveArmFeed) -> None:
             sys.stdin.readline()
             return
         print(f"\x1b[{n_lines}A", end="")  # move cursor up to overwrite the table
+
+
+def _read_positions_retry(bus: FeetechBus, attempts: int = 5) -> list[int]:
+    """Read raw positions, retrying — reads right after EEPROM writes can miss a reply."""
+    for attempt in range(attempts):
+        try:
+            return [t.position_raw for t in bus.read_telemetry()]
+        except RuntimeError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05)
+    raise AssertionError("unreachable")
+
+
+def _write_half_turn_homing(bus: FeetechBus) -> list[int]:
+    """lerobot's set_half_turn_homings: write servo-side Homing_Offset so the CURRENT pose
+    (the middle of the range of motion) reads ~2047 on every motor.
+
+    This puts the 0/4095 tick wrap half a revolution away from the middle, so no joint can
+    cross it during the range sweep — software-only offsets can't guarantee that, and an
+    arm whose middle happens to sit near the wrap point gets +-360 deg jumps (seen on real
+    hardware). Returns the re-read (homed) middle positions.
+    """
+    half_turn = TICKS_PER_REV // 2 - 1  # 2047
+    for motor_id in bus.motor_ids:
+        bus.write_homing_offset(motor_id, 0)
+    mechanical = _read_positions_retry(bus)
+    for motor_id, mech in zip(bus.motor_ids, mechanical, strict=True):
+        bus.write_homing_offset(motor_id, mech - half_turn)
+    homed = _read_positions_retry(bus)
+    drifted = [f"motor {i + 1} reads {p}" for i, p in enumerate(homed) if abs(p - half_turn) > 30]
+    if drifted:  # the arm moved between the two reads, or a write was lost
+        raise RuntimeError(f"homing verification failed (expected ~{half_turn}): {', '.join(drifted)} — hold the arm still and retry")
+    return homed
 
 
 def _pick_arm_by_wiggle(ports: tuple[str, ...]) -> str:
@@ -190,7 +241,13 @@ def main(config: CalibrateConfig) -> None:
         rr.set_time("time", timestamp=time.time())
         target.log_pose(list(target.center_angles_rad))
         input("1/2  move the arm to the MIDDLE of its range of motion (match the gray target), then press Enter...")
-        raw_middle = feed.capture()
+        feed.capture()  # make sure the arm is actually answering before touching EEPROM
+        # Half-turn homing (lerobot): written to the servos, so KEEP THE ARM STILL here.
+        feed.pause()
+        bus.set_torque(False)  # limp for hand-guiding; also clears Lock so EEPROM writes land
+        raw_middle = _write_half_turn_homing(bus)
+        feed.resume()
+        print(f"     homing offsets written to the servos — middle pose now reads {raw_middle}")
         feed.reset_ranges()
 
         # From here the homing is known, so a live model is trustworthy: show it
@@ -210,6 +267,12 @@ def main(config: CalibrateConfig) -> None:
         _sweep_until_enter(feed)
         range_min, range_max = list(feed.range_min), list(feed.range_max)
         range_min[WRIST_ROLL_INDEX], range_max[WRIST_ROLL_INDEX] = 0, TICKS_PER_REV - 1
+        # Servo-side motion limits from the sweep (lerobot parity). Also overwrites stale
+        # limits a previous lerobot calibration may have left, which no longer line up
+        # once the homing offsets above changed.
+        feed.pause()
+        for i, motor_id in enumerate(bus.motor_ids):
+            bus.write_position_limits(motor_id, range_min[i], range_max[i])
     finally:
         feed.stop()
         bus.close()
