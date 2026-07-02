@@ -16,7 +16,8 @@ and **live** (follows the real arm). Torque is off; move the arm by hand.
 Writes ``calibrations/<usb_id>.json`` in the portugal format that
 ``log-so100`` loads.
 
-    pixi run calibrate-so100 --rr-config.connect [--leader]
+    pixi run calibrate-so100 leader --rr-config.connect
+    pixi run calibrate-so100 follower --rr-config.connect
 """
 
 from __future__ import annotations
@@ -27,9 +28,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import rerun as rr
 import rerun.blueprint as rrb
+import tyro
 
 from so100_hackathon.calibration import DEFAULT_MOTOR_NAMES, MotorCalibration, fallback_calibration, save_calibration
 from so100_hackathon.feetech import TICKS_PER_REV, FeetechBus, detect_arm_ports, usb_id_from_port
@@ -45,12 +48,13 @@ WIGGLE_TICKS = 100  # ~9 deg of joint motion identifies an arm during port selec
 
 @dataclass
 class CalibrateConfig:
+    kind: tyro.conf.Positional[Literal["leader", "follower"]]
+    """Which arm this is — required, so leader/follower is always explicit. The leader
+    uses the handle + trigger model, and its gripper sweep is squeeze/release the trigger."""
     rr_config: LiveViewerConfig = field(default_factory=LiveViewerConfig)
     port: str | None = None
     """Serial port of the arm to calibrate. Default: the single plugged-in arm; with
     several plugged in, wiggle a joint on the one you want and it's picked automatically."""
-    leader: bool = False
-    """Calibrate a leader arm (handle + trigger model; the gripper sweep is squeeze/release the trigger)."""
     calibration_dir: Path = Path("calibrations")
 
 
@@ -148,9 +152,10 @@ def main(config: CalibrateConfig) -> None:
     out_path = config.calibration_dir / f"{usb_id}.json"
 
     placeholder = fallback_calibration()
-    urdf_path = LEADER_URDF_PATH if config.leader else FOLLOWER_URDF_PATH
+    is_leader = config.kind == "leader"
+    urdf_path = LEADER_URDF_PATH if is_leader else FOLLOWER_URDF_PATH
     target = UrdfArm.create("target", placeholder, urdf_path=urdf_path, translation=(0.0, 0.0, 0.0), color=(0.5, 0.5, 0.5))
-    live = UrdfArm.create("live", placeholder, urdf_path=urdf_path, translation=(0.4, 0.0, 0.0), color=MATTE_BLACK)
+    live = UrdfArm.create("live", placeholder, urdf_path=urdf_path, translation=(0.0, -0.4, 0.0), color=MATTE_BLACK)
     rr.send_blueprint(
         rrb.Blueprint(
             rrb.Spatial3DView(
@@ -166,8 +171,7 @@ def main(config: CalibrateConfig) -> None:
     bus = FeetechBus(port)
     feed = _LiveArmFeed(bus, live)
 
-    kind = "leader" if config.leader else "follower"
-    print(f"\ncalibrating {kind} {usb_id} on {port} -> {out_path}")
+    print(f"\ncalibrating {config.kind} {usb_id} on {port} -> {out_path}")
     print("in the viewer: GRAY arm = target pose, the other arm = live view of your arm\n")
     try:
         rr.set_time("time", timestamp=time.time())
@@ -176,7 +180,7 @@ def main(config: CalibrateConfig) -> None:
         raw_middle = feed.capture()
         feed.reset_ranges()
 
-        grip = "squeeze/release the trigger fully" if config.leader else "fully close and open the gripper"
+        grip = "squeeze/release the trigger fully" if is_leader else "fully close and open the gripper"
         print(f"2/2  move every joint EXCEPT wrist_roll through its full range of motion ({grip} too).")
         print("     recording positions — press Enter to stop...")
         _sweep_until_enter(feed)
@@ -211,5 +215,5 @@ def main(config: CalibrateConfig) -> None:
         )
         print(f"{name}: middle={raw_middle[i]} range=[{range_min[i]}, {range_max[i]}] (span {span_deg:.0f} deg)")
 
-    save_calibration(out_path, calibration, kind=kind, range_min=range_min, range_max=range_max)
+    save_calibration(out_path, calibration, kind=config.kind, range_min=range_min, range_max=range_max)
     print(f"\nwrote {out_path} — verify with: pixi run log-so100")
