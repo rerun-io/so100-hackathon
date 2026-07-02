@@ -148,6 +148,7 @@ class FeetechBus:
 
     def _read_register(self, motor_id: int, address: int, size: int, *, attempts: int = 3) -> int:
         read = self.packet_handler.read1ByteTxRx if size == 1 else self.packet_handler.read2ByteTxRx
+        value, comm, error = 0, scs.COMM_TX_FAIL, 0
         with self.lock:
             for attempt in range(attempts):
                 try:
