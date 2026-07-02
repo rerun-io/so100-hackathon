@@ -326,7 +326,7 @@ def build_page(viewer_port: int, grpc_port: int, catalog_port: int) -> str:
 
 def make_handler(recorder: Recorder, page: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args: object) -> None:  # silence request logging
+        def log_message(self, format: str, *args: object) -> None:  # silence request logging
             pass
 
         def _send(self, code: int, body: bytes, content_type: str) -> None:

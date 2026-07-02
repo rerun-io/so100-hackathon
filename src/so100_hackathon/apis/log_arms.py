@@ -155,8 +155,7 @@ def _open_arms(config: LogArmsConfig) -> list[Arm]:
             resolved[0].is_leader = True
             resolved[1].is_leader = False
             print(
-                f"GUESSING {resolved[0].name} is the leader — pass --leader <usb_id> if wrong, "
-                "or calibrate with --leader to make it permanent",
+                f"GUESSING {resolved[0].name} is the leader — pass --leader <usb_id> if wrong, or calibrate with --leader to make it permanent",
                 flush=True,
             )
     resolved.sort(key=lambda arm: not arm.is_leader)  # leader first -> leftmost

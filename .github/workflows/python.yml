@@ -1,0 +1,26 @@
+# Copied from https://github.com/rerun-io/rerun_template
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+    types: [ opened, synchronize ]
+
+name: Python
+
+jobs:
+  python-check:
+    name: Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: prefix-dev/setup-pixi@v0.8.8
+        with:
+          pixi-version: v0.72.0
+          cache: true
+          environments: dev
+
+      - run: pixi run -e dev py-fmt-check
+
+      - run: pixi run -e dev py-lint

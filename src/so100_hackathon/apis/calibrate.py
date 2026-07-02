@@ -262,7 +262,9 @@ def main(config: CalibrateConfig) -> None:
         # From here the homing is known, so a live model is trustworthy: show it
         # mirroring the real arm (also instantly reveals any mirrored joint).
         display = [
-            MotorCalibration(motor_name=name, homing_offset=0, start_pos=raw_middle[i], end_pos=raw_middle[i] + DRIVE_SIGNS[i] * half_rev, calib_mode="DEGREE")
+            MotorCalibration(
+                motor_name=name, homing_offset=0, start_pos=raw_middle[i], end_pos=raw_middle[i] + DRIVE_SIGNS[i] * half_rev, calib_mode="DEGREE"
+            )
             for i, name in enumerate(DEFAULT_MOTOR_NAMES)
         ]
         live = UrdfArm.create("live", display, urdf_path=urdf_path, translation=(0.0, -0.4, 0.0), color=MATTE_BLACK)
@@ -297,7 +299,10 @@ def main(config: CalibrateConfig) -> None:
                 bus.write_position_limits(motor_id, range_min[i], range_max[i])
         except RuntimeError as error:
             # The sweep data is good; don't throw away the whole session over a flaky write.
-            print(f"WARNING: writing servo position limits failed ({error}) — saving the calibration anyway; re-run if motion seems restricted", flush=True)
+            print(
+                f"WARNING: writing servo position limits failed ({error}) — saving the calibration anyway; re-run if motion seems restricted",
+                flush=True,
+            )
     finally:
         feed.stop()
         bus.close()
@@ -308,9 +313,7 @@ def main(config: CalibrateConfig) -> None:
         span_deg = span * 360.0 / TICKS_PER_REV
         if i == GRIPPER_INDEX:
             # Assembly convention: raw min = closed, raw max = open (0..100%).
-            calibration.append(
-                MotorCalibration(motor_name=name, homing_offset=0, start_pos=range_min[i], end_pos=range_max[i], calib_mode="LINEAR")
-            )
+            calibration.append(MotorCalibration(motor_name=name, homing_offset=0, start_pos=range_min[i], end_pos=range_max[i], calib_mode="LINEAR"))
             print(f"{name}: closed={range_min[i]} open={range_max[i]} (span {span_deg:.0f} deg)")
             continue
         calibration.append(
