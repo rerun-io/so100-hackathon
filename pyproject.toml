@@ -1,0 +1,66 @@
+[project]
+authors = [{name = "Pablo Vela", email = "pablovela5620@gmail.com"}]
+dependencies = []
+name = "so100-hackathon"
+requires-python = ">= 3.11"
+version = "0.1.0"
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/so100_hackathon"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64"]
+
+[tool.pixi.dependencies]
+python = ">=3.11"
+rerun-sdk = "==0.33.1"
+numpy = "*"
+tyro = "*"
+pyserial = "*"
+py-opencv = "*"
+
+[tool.pixi.pypi-dependencies]
+so100_hackathon = { path = ".", editable = true }
+feetech-servo-sdk = ">=1.0.0"
+
+[tool.pixi.feature.dev.dependencies]
+ruff = "*"
+pytest = ">=8.0.0,<9"
+beartype = ">=0.22.9"
+pyrefly = "*"
+
+[tool.pixi.feature.dev.activation.env]
+PIXI_DEV_MODE = "1"
+
+[tool.pixi.feature.dev.tasks.lint]
+cmd = "ruff check ."
+description = "Lint the package"
+
+[tool.pixi.feature.dev.tasks.typecheck]
+cmd = "pyrefly check src tools"
+description = "Typecheck the package"
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+
+[tool.pixi.tasks.log-so100]
+cmd = "python tools/apps/log_so100.py"
+description = "Stream live SO-100 arm telemetry into a Rerun viewer"
+
+[tool.pixi.tasks.calibrate-so100]
+cmd = "python tools/apps/calibrate_so100.py"
+description = "Guided SO-100 calibration (match target poses shown in the viewer)"
+
+[tool.ruff]
+line-length = 150
+extend-exclude = [".pixi"]
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "SIM", "I"]
+ignore = ["E501"]

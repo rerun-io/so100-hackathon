@@ -1,0 +1,67 @@
+{
+  "homing_offset": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "drive_mode": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "start_pos": [
+    3436,
+    2388,
+    3309,
+    3178,
+    609,
+    1981
+  ],
+  "end_pos": [
+    5484,
+    4436,
+    5357,
+    5226,
+    2657,
+    1988
+  ],
+  "calib_mode": [
+    "DEGREE",
+    "DEGREE",
+    "DEGREE",
+    "DEGREE",
+    "DEGREE",
+    "LINEAR"
+  ],
+  "motor_names": [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_roll",
+    "gripper"
+  ],
+  "kind": "follower",
+  "range_min": [
+    3401,
+    1113,
+    38,
+    18,
+    0,
+    1981
+  ],
+  "range_max": [
+    3443,
+    2393,
+    4082,
+    4054,
+    4095,
+    1988
+  ]
+}
