@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import glob
+import threading
 import time
 from dataclasses import dataclass
 
@@ -78,6 +79,10 @@ class FeetechBus:
         self.port = port
         self.motor_ids = motor_ids
         self.packet_handler = scs.PacketHandler(PROTOCOL_END)
+        # Serializes bus transactions across threads: the sdk's own busy flag drops after
+        # the FIRST reply of a sync read, so without this a concurrent write can interleave
+        # with the remaining replies on the half-duplex line.
+        self.lock = threading.Lock()
         self._open()
 
     def _open(self) -> None:
@@ -98,10 +103,11 @@ class FeetechBus:
         self._open()
 
     def read_telemetry(self) -> list[MotorTelemetry]:
-        try:
-            comm = self.sync_read.txRxPacket()
-        except OSError as error:  # pyserial raises SerialException (an OSError subclass) on USB drops
-            raise RuntimeError(f"{self.port}: bus read failed (device disconnected?): {error}") from error
+        with self.lock:
+            try:
+                comm = self.sync_read.txRxPacket()
+            except OSError as error:  # pyserial raises SerialException (an OSError subclass) on USB drops
+                raise RuntimeError(f"{self.port}: bus read failed (device disconnected?): {error}") from error
         if comm != scs.COMM_SUCCESS:
             raise RuntimeError(f"{self.port}: sync read failed: {self.packet_handler.getTxRxResult(comm)}")
 
@@ -124,20 +130,47 @@ class FeetechBus:
     def _write_register(self, motor_id: int, address: int, value: int, size: int, *, attempts: int = 3) -> None:
         write = self.packet_handler.write1ByteTxRx if size == 1 else self.packet_handler.write2ByteTxRx
         comm, error = scs.COMM_TX_FAIL, 0
-        for attempt in range(attempts):
-            try:
-                comm, error = write(self.port_handler, motor_id, address, value)
-            except OSError as os_error:
-                raise RuntimeError(f"{self.port}: bus write failed (device disconnected?): {os_error}") from os_error
-            if comm == scs.COMM_SUCCESS and error == 0:
-                return
-            # EEPROM commits (e.g. the gain registers) can delay the servo's status reply
-            # past the packet timeout even though the write landed; settle and retry.
-            if attempt < attempts - 1:
-                time.sleep(0.01)
+        with self.lock:
+            for attempt in range(attempts):
+                try:
+                    comm, error = write(self.port_handler, motor_id, address, value)
+                except OSError as os_error:
+                    raise RuntimeError(f"{self.port}: bus write failed (device disconnected?): {os_error}") from os_error
+                if comm == scs.COMM_SUCCESS and error == 0:
+                    return
+                # EEPROM commits (e.g. the gain registers) can delay the servo's status reply
+                # past the packet timeout even though the write landed; settle and retry.
+                if attempt < attempts - 1:
+                    time.sleep(0.01)
         if comm != scs.COMM_SUCCESS:
             raise RuntimeError(f"{self.port}: write to motor {motor_id} addr {address} failed: {self.packet_handler.getTxRxResult(comm)}")
         raise RuntimeError(f"{self.port}: motor {motor_id} rejected write to addr {address}: {self.packet_handler.getRxPacketError(error)}")
+
+    def _read_register(self, motor_id: int, address: int, size: int, *, attempts: int = 3) -> int:
+        read = self.packet_handler.read1ByteTxRx if size == 1 else self.packet_handler.read2ByteTxRx
+        with self.lock:
+            for attempt in range(attempts):
+                try:
+                    value, comm, error = read(self.port_handler, motor_id, address)
+                except OSError as os_error:
+                    raise RuntimeError(f"{self.port}: bus read failed (device disconnected?): {os_error}") from os_error
+                except IndexError:  # sdk bug: a timed-out reply still gets indexed
+                    comm, error = scs.COMM_RX_TIMEOUT, 0
+                if comm == scs.COMM_SUCCESS and error == 0:
+                    return value
+                if attempt < attempts - 1:
+                    time.sleep(0.01)
+        raise RuntimeError(f"{self.port}: read from motor {motor_id} addr {address} failed: {self.packet_handler.getTxRxResult(comm)}")
+
+    def read_positions(self, *, attempts: int = 1) -> list[int]:
+        """Raw tick positions for all motors. Extra attempts cover reads right after EEPROM
+        writes, whose late status replies can desync the next transaction."""
+        for _ in range(attempts - 1):
+            try:
+                return [t.position_raw for t in self.read_telemetry()]
+            except RuntimeError:
+                time.sleep(0.05)
+        return [t.position_raw for t in self.read_telemetry()]
 
     def set_torque(self, enabled: bool) -> None:
         """Enable/disable torque on every motor (Lock toggled alongside, as lerobot does).
@@ -178,10 +211,16 @@ class FeetechBus:
         """Servo-side homing: present = mechanical - offset (mod 4096), verified on hardware.
 
         EEPROM register — call with torque off (``set_torque(False)`` also clears Lock).
-        The register is sign-magnitude with 11 magnitude bits, so |offset| caps at 2047.
+        The register is sign-magnitude with 11 magnitude bits, so |offset| caps at 2047;
+        only the mechanical-position-4095 edge (offset 2048) is absorbed, as a 1-tick error.
         """
+        if abs(offset) > 2048:
+            raise ValueError(f"homing offset {offset} does not fit the servo's 11-bit sign-magnitude register")
         offset = min(max(offset, -2047), 2047)
         self._write_register(motor_id, ADDR_HOMING_OFFSET, _encode_sign_magnitude(offset, 11), 2)
+
+    def read_homing_offset(self, motor_id: int) -> int:
+        return _sign_magnitude(self._read_register(motor_id, ADDR_HOMING_OFFSET, 2), 11)
 
     def write_position_limits(self, motor_id: int, range_min: int, range_max: int) -> None:
         """Servo-side motion limits (EEPROM, torque off) — lerobot writes the swept range here."""
@@ -190,13 +229,14 @@ class FeetechBus:
 
     def sync_write_goal(self, positions: list[int]) -> None:
         """One Goal_Position sync-write for all motors (fire-and-forget, servos send no reply)."""
-        self.sync_write.clearParam()
-        for motor_id, position in zip(self.motor_ids, positions, strict=True):
-            self.sync_write.addParam(motor_id, [scs.SCS_LOBYTE(position), scs.SCS_HIBYTE(position)])
-        try:
-            comm = self.sync_write.txPacket()
-        except OSError as error:
-            raise RuntimeError(f"{self.port}: goal sync write failed (device disconnected?): {error}") from error
+        with self.lock:
+            self.sync_write.clearParam()
+            for motor_id, position in zip(self.motor_ids, positions, strict=True):
+                self.sync_write.addParam(motor_id, [scs.SCS_LOBYTE(position), scs.SCS_HIBYTE(position)])
+            try:
+                comm = self.sync_write.txPacket()
+            except OSError as error:
+                raise RuntimeError(f"{self.port}: goal sync write failed (device disconnected?): {error}") from error
         if comm != scs.COMM_SUCCESS:
             raise RuntimeError(f"{self.port}: goal sync write failed: {self.packet_handler.getTxRxResult(comm)}")
 
