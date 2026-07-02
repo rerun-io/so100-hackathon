@@ -1,18 +1,30 @@
-"""Host a Rerun proxy, an OSS web viewer, and a custom control server together.
+"""Host a Rerun proxy, an OSS web viewer, an OSS catalog server, and a control server.
 
-Three servers are started on three ports:
+Four servers are started:
 
-* ``--grpc-port``    (default 9876): a Rerun gRPC *proxy* server (``rr.serve_grpc``).
-* ``--viewer-port``  (default 9090): the OSS Rerun web-viewer assets
+* ``--grpc-port``    (default 9876):  a Rerun gRPC *proxy* server (``rr.serve_grpc``)
+  -- the live data source the viewer streams from.
+* ``--viewer-port``  (default 9090):  the OSS Rerun web-viewer assets
   (``rr.start_web_viewer_server``) -- i.e. the viewer HTML/wasm hosted locally
   instead of from ``app.rerun.io``.
-* ``--control-port`` (default 8000): a small stdlib HTTP "control server" that
+* ``--catalog-port`` (default 51234): the OSS catalog server (``rerun server``) --
+  recordings written to disk get registered here on "stop".
+* ``--control-port`` (default 8000):  a small stdlib HTTP "control server" that
   serves the combined HTML page and handles the ``start`` / ``stop`` buttons.
 
 The combined HTML page (served by the control server at ``/``) embeds the OSS
-web viewer in an iframe -- so the viewer is loaded from the local OSS server and
-connected to the local proxy server -- in the top 80%, and puts a simple
-control bar with "start" / "stop" buttons in the bottom 20%.
+web viewer in an iframe -- loaded from the local OSS server and connected to the
+local proxy server (live) and the local catalog server (browse registered
+recordings) -- in the top 80%, with a "start" / "stop" control bar in the
+bottom 20%.
+
+While recording, data is *teed* (``rr.set_sinks``) to two sinks at once:
+
+* a ``GrpcSink`` pointing at the proxy server (so the viewer shows it live), and
+* a ``FileSink`` writing an ``.rrd`` file into ``recordings/`` (repo root).
+
+On "stop", the file sink is closed (footer flushed) and the ``.rrd`` file is
+registered to the OSS catalog server.
 
 Run it with::
 
@@ -24,19 +36,31 @@ then open http://localhost:8000
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
+import os
+import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import numpy as np
 import rerun as rr
 import tyro
 
+# The catalog client refuses localhost tokens unless we opt out of the host check.
+os.environ.setdefault("RERUN_INSECURE_SKIP_HOST_CHECK", "1")
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+APP_ID = "so-100"
+DATASET_NAME = "recordings"
+
 
 @dataclasses.dataclass
 class Config:
-    """Ports for the three servers."""
+    """Ports and paths for the servers."""
 
     grpc_port: int = 9876
     """Port for the Rerun gRPC proxy server."""
@@ -44,46 +68,108 @@ class Config:
     viewer_port: int = 9090
     """Port for the OSS Rerun web-viewer assets."""
 
+    catalog_port: int = 51234
+    """Port for the OSS catalog server (``rerun server``)."""
+
     control_port: int = 8000
     """Port for the custom control server (also serves the HTML page)."""
+
+    recordings_dir: Path = REPO_ROOT / "recordings"
+    """Folder the ``.rrd`` files are written to (default: ``recordings/`` at repo root)."""
 
     open_browser: bool = True
     """Open the combined page in the default browser on startup."""
 
 
-class Streamer:
-    """Background thread that logs animated data to the proxy while running."""
+class Recorder:
+    """Owns the tee'd recording: streams to the proxy + a file, registers on stop."""
 
-    def __init__(self) -> None:
+    def __init__(self, proxy_uri: str, catalog_uri: str, recordings_dir: Path) -> None:
+        self._proxy_uri = proxy_uri
+        self._catalog_uri = catalog_uri
+        self._recordings_dir = recordings_dir
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self._counter = 0
+        self._current_file: Path | None = None
+        self._last: dict[str, object] = {}  # summary of the most recent recording
+        self._catalog = None  # lazily created rr.catalog.CatalogClient
 
     @property
     def running(self) -> bool:
         thread = self._thread
         return thread is not None and thread.is_alive()
 
-    def start(self) -> bool:
-        """Start streaming. Returns True if it was started, False if already running."""
+    def state(self) -> dict[str, object]:
+        return {"running": self.running, "last": self._last}
+
+    def start(self) -> dict[str, object]:
         with self._lock:
             if self.running:
-                return False
-            self._stop.clear()
-            self._thread = threading.Thread(target=self._run, name="streamer", daemon=True)
-            self._thread.start()
-            return True
+                return self.state()
 
-    def stop(self) -> bool:
-        """Stop streaming. Returns True if it was stopped, False if not running."""
+            self._recordings_dir.mkdir(parents=True, exist_ok=True)
+            self._counter += 1
+            rec_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{self._counter:03d}"
+            path = self._recordings_dir / f"{rec_id}.rrd"
+            self._current_file = path
+
+            # A fresh recording id per take, so each file is a distinct catalog segment.
+            rr.init(APP_ID, recording_id=rec_id)
+
+            # Tee: everything logged now goes to BOTH the proxy and the file.
+            rr.set_sinks(rr.GrpcSink(url=self._proxy_uri), rr.FileSink(str(path)))
+
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, name="recorder", daemon=True)
+            self._thread.start()
+            self._last = {"file": str(path), "status": "recording"}
+            print(f"[recording] started {rec_id} -> {path}", flush=True)
+            return self.state()
+
+    def stop(self) -> dict[str, object]:
         with self._lock:
             if not self.running:
-                return False
+                return self.state()
             self._stop.set()
             thread = self._thread
+            path = self._current_file
+
         if thread is not None:
             thread.join(timeout=2.0)
-        return True
+
+        # Drop the FileSink (flushes the footer) but keep streaming to the proxy.
+        rr.set_sinks(rr.GrpcSink(url=self._proxy_uri))
+        print(f"[recording] stopped -> {path}", flush=True)
+
+        summary: dict[str, object] = {"file": str(path) if path else None, "status": "stopped"}
+        if path is not None:
+            try:
+                summary["registration"] = self._register(path)
+                summary["status"] = "registered"
+                segments = summary["registration"].get("segment_ids")  # type: ignore[union-attr]
+                print(f"[catalog]   registered {path} in dataset '{DATASET_NAME}' (segments: {segments})", flush=True)
+            except Exception as err:  # noqa: BLE001 - surface any failure to the UI
+                summary["status"] = "register_failed"
+                summary["error"] = f"{type(err).__name__}: {err}"
+                print(f"[catalog]   registration FAILED for {path}: {summary['error']}", flush=True)
+
+        with self._lock:
+            self._last = summary
+        return self.state()
+
+    def _register(self, path: Path) -> dict[str, object]:
+        if self._catalog is None:
+            self._catalog = rr.catalog.CatalogClient(self._catalog_uri)
+        dataset = self._catalog.create_dataset(DATASET_NAME, exist_ok=True)
+        handle = dataset.register([path.resolve().as_uri()])
+        result = handle.wait()
+        return {
+            "dataset": DATASET_NAME,
+            "uri": path.resolve().as_uri(),
+            "segment_ids": list(getattr(result, "segment_ids", []) or []),
+        }
 
     def _run(self) -> None:
         step = 0
@@ -117,12 +203,14 @@ class Streamer:
             time.sleep(1.0 / 30.0)
 
 
-def build_page(viewer_port: int, grpc_port: int) -> str:
-    """HTML: top 80% embedded OSS viewer connected to the proxy, bottom 20% controls."""
+def build_page(viewer_port: int, grpc_port: int, catalog_port: int) -> str:
+    """HTML: top 80% embedded OSS viewer, bottom 20% controls."""
 
-    # The OSS web viewer reads `?url=` and connects to that gRPC data source.
+    # The OSS web viewer reads `?url=` (repeatable) and connects to those sources:
+    # the proxy for the live stream, and the catalog to browse registered recordings.
     proxy_uri = f"rerun+http://localhost:{grpc_port}/proxy"
-    viewer_src = f"http://localhost:{viewer_port}/?url={proxy_uri}"
+    catalog_uri = f"rerun+http://localhost:{catalog_port}"
+    viewer_src = f"http://localhost:{viewer_port}/?url={proxy_uri}&url={catalog_uri}"
 
     return f"""<!doctype html>
 <html lang="en">
@@ -155,7 +243,7 @@ def build_page(viewer_port: int, grpc_port: int) -> str:
     #start {{ background: #2e7d32; }}
     #stop  {{ background: #c62828; }}
     button:disabled {{ opacity: 0.4; cursor: default; }}
-    #status {{ margin-left: auto; font-variant-numeric: tabular-nums; }}
+    #status {{ margin-left: auto; font-size: 0.9rem; opacity: 0.85; max-width: 55%; text-align: right; }}
   </style>
 </head>
 <body>
@@ -174,9 +262,13 @@ def build_page(viewer_port: int, grpc_port: int) -> str:
 
     function render(state) {{
       const running = !!(state && state.running);
-      statusEl.textContent = running ? "streaming" : "stopped";
       startBtn.disabled = running;
       stopBtn.disabled = !running;
+      const last = (state && state.last) || {{}};
+      let msg = running ? "recording" : (last.status || "idle");
+      if (last.file) msg += " · " + last.file.split("/").pop();
+      if (last.error) msg += " · " + last.error;
+      statusEl.textContent = msg;
     }}
 
     async function call(path) {{
@@ -207,9 +299,9 @@ def build_page(viewer_port: int, grpc_port: int) -> str:
 """
 
 
-def make_handler(streamer: Streamer, page: str) -> type[BaseHTTPRequestHandler]:
+def make_handler(recorder: Recorder, page: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args: object) -> None:  # noqa: A003 - silence request logging
+        def log_message(self, *args: object) -> None:  # silence request logging
             pass
 
         def _send(self, code: int, body: bytes, content_type: str) -> None:
@@ -219,29 +311,24 @@ def make_handler(streamer: Streamer, page: str) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
-        def _send_json(self) -> None:
-            import json
-
-            body = json.dumps({"running": streamer.running}).encode("utf-8")
-            self._send(200, body, "application/json")
+        def _send_state(self, state: dict[str, object]) -> None:
+            self._send(200, json.dumps(state).encode("utf-8"), "application/json")
 
         def do_GET(self) -> None:
             path = self.path.split("?", 1)[0]
             if path in ("/", "/index.html"):
                 self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
             elif path == "/status":
-                self._send_json()
+                self._send_state(recorder.state())
             else:
                 self._send(404, b"not found", "text/plain")
 
         def do_POST(self) -> None:
             path = self.path.split("?", 1)[0]
             if path == "/start":
-                streamer.start()
-                self._send_json()
+                self._send_state(recorder.start())
             elif path == "/stop":
-                streamer.stop()
-                self._send_json()
+                self._send_state(recorder.stop())
             else:
                 self._send(404, b"not found", "text/plain")
 
@@ -249,22 +336,38 @@ def make_handler(streamer: Streamer, page: str) -> type[BaseHTTPRequestHandler]:
 
 
 def main(config: Config) -> None:
-    # A recording is required for the gRPC proxy to attach to; the streamer logs to it.
-    rr.init("newtheory_hackathon")
+    rr.init(APP_ID)
 
-    # 1) gRPC proxy server -- this is for the live view of the data
-    proxy_uri = rr.serve_grpc(grpc_port=config.grpc_port)
-    print(f"Live proxy server:  {proxy_uri}")
+    # 1) gRPC proxy server -- the live data source the viewer streams from.
+    #    It runs in its OWN process: `set_sinks` in this process would otherwise
+    #    tear down an in-process `serve_grpc` server (the server is the sink),
+    #    breaking the tee. As a separate process it survives our sink swaps.
+    proxy_uri = f"rerun+http://localhost:{config.grpc_port}/proxy"
+    proxy_proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            f"import rerun as rr, time; rr.init('{APP_ID}'); rr.serve_grpc(grpc_port={config.grpc_port}); time.sleep(1e9)",
+        ],
+    )
+    print(f"gRPC proxy server:  {proxy_uri}")
 
     # 2) OSS web-viewer assets -- the viewer HTML/wasm hosted locally.
     rr.start_web_viewer_server(port=config.viewer_port)
     print(f"OSS web viewer:     http://localhost:{config.viewer_port}")
 
-    # 3) Control server -- serves the combined HTML page and the start/stop API.
-    streamer = Streamer()
-    page = build_page(config.viewer_port, config.grpc_port)
-    handler = make_handler(streamer, page)
-    httpd = ThreadingHTTPServer(("localhost", config.control_port), handler)
+    # 3) OSS catalog server -- recordings are registered here on stop.
+    catalog_uri = f"rerun+http://localhost:{config.catalog_port}"
+    catalog_proc = subprocess.Popen(
+        [sys.executable, "-m", "rerun", "server", "--port", str(config.catalog_port)],
+    )
+    print(f"OSS catalog server: {catalog_uri}")
+    time.sleep(2.0)  # give the subprocess servers a moment to bind before the viewer connects
+
+    # 4) Control server -- serves the combined HTML page and the start/stop API.
+    recorder = Recorder(proxy_uri, catalog_uri, config.recordings_dir)
+    page = build_page(config.viewer_port, config.grpc_port, config.catalog_port)
+    httpd = ThreadingHTTPServer(("localhost", config.control_port), make_handler(recorder, page))
     page_url = f"http://localhost:{config.control_port}"
     print(f"Control server:     {page_url}  (open this)")
 
@@ -278,8 +381,10 @@ def main(config: Config) -> None:
     except KeyboardInterrupt:
         print("\nshutting down")
     finally:
-        streamer.stop()
+        recorder.stop()
         httpd.shutdown()
+        proxy_proc.terminate()
+        catalog_proc.terminate()
 
 
 if __name__ == "__main__":

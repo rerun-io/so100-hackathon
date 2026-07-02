@@ -52,7 +52,7 @@ dev = { features = ["dev"], solve-group = "default" }
 
 [tool.pixi.tasks.serve-rerun-control]
 cmd = "python tools/apps/serve_rerun_control.py"
-description = "Host Rerun proxy + OSS web viewer + custom control server with start/stop buttons"
+description = "Host Rerun proxy + OSS web viewer + OSS catalog + control server; tee recordings to disk and register on stop"
 
 [tool.pixi.tasks.log-so100]
 cmd = "python tools/apps/log_so100.py"
