@@ -112,6 +112,7 @@ Safety, since teleop turns the follower's torque ON:
 ```bash
 pixi run -e dev lint
 pixi run -e dev typecheck
+pixi run -e dev deadcode
 ```
 
 Package layout follows the examples-monorepo conventions: Tyro configs + `main()` live in
