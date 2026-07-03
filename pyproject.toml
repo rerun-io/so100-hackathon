@@ -73,6 +73,13 @@ description = "Find dead code in the package"
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 
+# rerun-lerobot can't live in the solve: it pulls in `lerobot`, which pins `rerun-sdk<0.27`,
+# conflicting with our `rerun-sdk==0.33.1`. Install it separately with an override that keeps
+# our newer rerun-sdk (LeRobot only uses rerun-sdk for its own optional viz, not the export).
+[tool.pixi.tasks.install-lerobot]
+cmd = "uv pip install 'rerun-lerobot>=0.2.0' --override pixi.lerobot-override.txt --python $CONDA_PREFIX/bin/python"
+description = "Install rerun-lerobot into the pixi env (for the dataset collector's 'export to LeRobot' button)"
+
 [tool.pixi.tasks.dataset-collector]
 cmd = "python tools/apps/dataset_collector.py"
 description = "Collect SO-100 datasets: browser start/stop, tee arm recordings to disk + register in a local Rerun catalog (--fake for a synthetic stream)"

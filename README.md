@@ -125,6 +125,17 @@ catalog:
 pixi run dataset-collector   # then open http://localhost:8000
 ```
 
+Start/stop records takes. **export to LeRobot** converts every recorded `.rrd` into a
+[LeRobot](https://github.com/huggingface/lerobot) v3 dataset under `lerobot/` (arm goal ->
+`action`, arm position -> `observation.state`, each camera -> `observation.images.camN`,
+JPEG frames re-encoded to h264). It shells out to
+[`rerun-lerobot`](https://github.com/rerun-io/rerun-lerobot), which isn't in the solve (it
+pulls `lerobot`, which pins an older `rerun-sdk`) — install it once:
+
+```bash
+pixi run install-lerobot
+```
+
 ## Development
 
 ```bash
