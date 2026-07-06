@@ -475,6 +475,7 @@ def list_episodes(client: rr.catalog.CatalogClient, recordings_dir: Path, datase
                     "viewer_url": ds.segment_url(segment_id),
                 }
             )
+
         def sort_key(entry: dict[str, object]) -> tuple[int, int, str]:
             # Episode number first, then legacy collision suffix (episode_1-2 etc.).
             stem = str(entry["stem"])

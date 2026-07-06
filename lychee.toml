@@ -79,4 +79,7 @@ exclude = [
 
   # Internal/private repo, returns 404 to unauthenticated checkers.
   'https://github.com/rerun-io/portugal',
+
+  # Course site, not deployed yet (README notes this).
+  'https://so100-hackathon.vercel.app',
 ]
