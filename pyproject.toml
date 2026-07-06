@@ -19,7 +19,6 @@ platforms = ["osx-arm64", "linux-64"]
 
 [tool.pixi.dependencies]
 python = ">=3.11"
-rerun-sdk = "==0.33.1"
 numpy = "*"
 tyro = "*"
 pyserial = "*"
@@ -32,11 +31,13 @@ pyobjc-framework-avfoundation = "*"
 
 [tool.pixi.pypi-dependencies]
 so100_hackathon = { path = ".", editable = true }
+# rerun-sdk from PyPI: conda-forge lags behind (0.34 not packaged there yet).
+rerun-sdk = "==0.34.0"
 feetech-servo-sdk = ">=1.0.0"
-datafusion = ">=52,<53"
+datafusion = ">=53,<54"
 markdown = ">=3.6"
 
-# LeRobot pins rerun-sdk<0.27 which conflicts with our 0.33.1, so the export env is fully
+# LeRobot pins an older rerun-sdk which conflicts with ours, so the export env is fully
 # isolated (no default feature). export_lerobot.py (default env) queries the catalog and
 # stages episodes to disk, then spawns the writer in this env to produce LeRobot v3.
 [tool.pixi.feature.export.dependencies]
