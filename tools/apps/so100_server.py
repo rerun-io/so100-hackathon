@@ -160,7 +160,17 @@ def spawn_proxy(grpc_port: int) -> subprocess.Popen[bytes]:
     """
     import rerun_cli.__main__ as rerun_cli
 
-    binary = rerun_cli.add_exe_suffix(str(Path(rerun_cli.__file__).parent / "rerun"))
+    # Mirror rerun_cli.__main__'s binary resolution: on macOS the binary ships
+    # inside an app bundle, elsewhere it sits next to the package.
+    cli_dir = Path(rerun_cli.__file__).parent
+    if binary := os.environ.get("RERUN_CLI_PATH"):
+        pass
+    else:
+        bundled = cli_dir / "Rerun.app" / "Contents" / "MacOS" / "Rerun"
+        if sys.platform == "darwin" and bundled.exists():
+            binary = str(bundled)
+        else:
+            binary = rerun_cli.add_exe_suffix(str(cli_dir / "rerun"))
     code = "\n".join(
         (
             "import os, signal, subprocess, sys, time",
