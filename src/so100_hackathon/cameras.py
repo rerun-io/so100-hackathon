@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+from typing import Any
 
 import cv2
 import rerun as rr
@@ -68,13 +69,65 @@ def detect_camera_indices(max_index: int = 4, *, include_builtin: bool = False) 
     return tuple(kept)
 
 
+class RecordingFanout:
+    """The tiny slice of the RecordingStream API the frame loops use (``set_time`` +
+    ``log``), fanned out to several recordings. Lets a source log every frame into the
+    always-on live stream *and* a take file at the same time."""
+
+    def __init__(self, *recs: rr.RecordingStream) -> None:
+        self.recs = recs
+
+    def set_time(self, *args: Any, **kwargs: Any) -> None:
+        for rec in self.recs:
+            rec.set_time(*args, **kwargs)
+
+    def log(self, *args: Any, **kwargs: Any) -> None:
+        for rec in self.recs:
+            rec.log(*args, **kwargs)
+
+
+FrameSink = rr.RecordingStream | RecordingFanout
+"""What the per-frame loops log into: a single recording or a fan-out over several."""
+
+
+class CameraSource:
+    """A camera-only data source (no arms), for testing the collection loop without hardware.
+
+    Same always-on interface as :class:`~so100_hackathon.apis.log_arms.ArmSession`. Each
+    :class:`CameraStreamer` runs its own thread and logs into the current sink;
+    :meth:`set_output` redirects them (e.g. to a live+file fan-out while a take records).
+    """
+
+    def __init__(self, rec: rr.RecordingStream, jpeg_quality: int = 75) -> None:
+        indices = detect_camera_indices(include_builtin=True)
+        self.streamers = [CameraStreamer(index, rec=rec, jpeg_quality=jpeg_quality) for index in indices]
+        print(f"data source:        {len(self.streamers)} camera(s) (fake, no arms)", flush=True)
+
+    def start(self) -> None:
+        for streamer in self.streamers:
+            streamer.start()
+
+    def begin(self, rec: rr.RecordingStream) -> None:
+        # Cameras have no static data to (re-)log; just point the threads at rec.
+        self.set_output(rec)
+
+    def set_output(self, rec: FrameSink) -> None:
+        # Redirect the camera threads (they snapshot their sink per frame).
+        for streamer in self.streamers:
+            streamer.rec = rec
+
+    def close(self) -> None:
+        for streamer in self.streamers:
+            streamer.stop()
+
+
 class CameraStreamer:
     """Capture one camera on a daemon thread and log frames under ``camera/cam<index>``."""
 
-    def __init__(self, index: int, *, rec: rr.RecordingStream, timeline: str = "time", jpeg_quality: int = 75) -> None:
+    def __init__(self, index: int, *, rec: FrameSink, timeline: str = "time", jpeg_quality: int = 75) -> None:
         self.index = index
-        self.rec = rec
-        """Recording to log into; reassign to redirect this thread's frames (the collector swaps takes)."""
+        self.rec: FrameSink = rec
+        """Sink to log into; reassign to redirect this thread's frames (the collector swaps takes)."""
         self.timeline = timeline
         self.jpeg_quality = jpeg_quality
         self.entity_path = f"camera/cam{index}"

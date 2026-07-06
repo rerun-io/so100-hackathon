@@ -11,7 +11,6 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from uuid import UUID
 
 import rerun as rr
 
@@ -33,7 +32,7 @@ def get_safe_application_id() -> str:
 class RerunTyroConfig:
     application_id: str = field(default_factory=get_safe_application_id)
     """Name of the application"""
-    recording_id: str | UUID | None = None
+    recording_id: str | None = None
     """Recording ID"""
     connect: bool = False
     """Whether to connect to an existing rerun instance or not"""

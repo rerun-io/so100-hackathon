@@ -42,6 +42,7 @@ import tyro
 from so100_hackathon.calibration import DEFAULT_MOTOR_NAMES, TICKS_PER_REV, MotorCalibration, fallback_calibration, save_calibration
 from so100_hackathon.feetech import FeetechBus, detect_arm_ports, usb_id_from_port
 from so100_hackathon.rerun_config import LiveViewerConfig
+from so100_hackathon.setup_phases import announce_phase
 from so100_hackathon.urdf_arm import FOLLOWER_URDF_PATH, LEADER_URDF_PATH, MATTE_BLACK, UrdfArm
 
 GRIPPER_INDEX = 5
@@ -77,11 +78,22 @@ class _LiveArmFeed:
         self.urdf: UrdfArm | None = None
         self._display_calibration: list[MotorCalibration] | None = None
         self.latest_raw: list[int] | None = None
+        self.show_ranges = False  # once true, the MIN/POS/MAX table is logged to /ranges (~5 Hz)
+        self._tick = 0
         self.reset_ranges()
         self._stop = threading.Event()
         self._paused = threading.Event()
         self._thread = threading.Thread(target=self._run, name="live-arm", daemon=True)
         self._thread.start()
+
+    def _ranges_table(self, raw: list[int]) -> str:
+        """The sweep table as monospace markdown, mirroring the terminal one."""
+        lines = [f"{'NAME':<15} {'MIN':>6} {'POS':>6} {'MAX':>6}"]
+        for i, name in enumerate(DEFAULT_MOTOR_NAMES):
+            lo = str(self.range_min[i]) if self.range_min[i] < TICKS_PER_REV else "-"  # reset sentinels
+            hi = str(self.range_max[i]) if self.range_max[i] > 0 else "-"
+            lines.append(f"{name:<15} {lo:>6} {raw[i]:>6} {hi:>6}")
+        return "```text\n" + "\n".join(lines) + "\n```"
 
     def attach_urdf(self, urdf: UrdfArm, calibration: list[MotorCalibration]) -> None:
         self._display_calibration = calibration
@@ -124,6 +136,9 @@ class _LiveArmFeed:
             if urdf is not None and display is not None:
                 self.rec.set_time("time", timestamp=time.time())
                 urdf.log_joints(self.rec, [calib.calibrated_from_raw(r) for calib, r in zip(display, raw, strict=True)])
+            self._tick += 1
+            if self.show_ranges and self._tick % 4 == 0:  # ~5 Hz is plenty for a table
+                self.rec.log("/ranges", rr.TextDocument(self._ranges_table(raw), media_type="text/markdown"), static=True)
             time.sleep(1.0 / 20.0)
 
     def require_responding(self) -> None:
@@ -216,32 +231,56 @@ def _pick_arm_by_wiggle(ports: tuple[str, ...]) -> str:
 
 
 def main(config: CalibrateConfig) -> None:
+    rec = config.rr_config.rec
+    is_leader = config.kind == "leader"
+    arm_label = "leader arm" if is_leader else "follower arm"
+    rec.send_recording_name("Leader arm" if is_leader else "Follower arm")
+
+    def instruct(text: str) -> None:
+        """The current step's instructions, shown as a text panel INSIDE the viewer."""
+        rec.log("/instructions", rr.TextDocument(text, media_type="text/markdown"), static=True)
+
+    def send_view(step: str, *arms: UrdfArm, table: bool = False) -> None:
+        """Per-phase layout: instructions next to the 3D pose (step 1) or the live
+        MIN/POS/MAX table (step 2). The follower's layout is mirrored left/right."""
+        text_view = rrb.TextDocumentView(origin="/instructions", name=f"{step} Instructions for a {arm_label}")
+        other: rrb.View
+        if table:
+            other = rrb.TextDocumentView(origin="/ranges", name=f"Degrees of freedom of a {arm_label}")
+        else:
+            other = rrb.Spatial3DView(
+                name="Leader arm" if is_leader else "Follower arm",
+                origin="/",
+                contents=["$origin/**", "- /instructions/**", "- /ranges/**"],
+                overrides={arm.collision_geometries_path: rrb.EntityBehavior(visible=False) for arm in arms},
+            )
+        views = (text_view, other) if is_leader else (other, text_view)
+        rec.send_blueprint(rrb.Blueprint(rrb.Horizontal(*views), collapse_panels=True), make_active=True)
+
     ports = (config.port,) if config.port else detect_arm_ports()
     if not ports:
         raise SystemExit("no SO-100 arms found (no /dev/cu.usbmodem* ports); pass --port explicitly")
-    port = ports[0] if len(ports) == 1 else _pick_arm_by_wiggle(ports)
+    if len(ports) == 1:
+        port = ports[0]
+    else:
+        announce_phase("wiggle")
+        instruct(
+            f"## Which arm?\n\nSeveral arms are plugged in.\n\n**Wiggle any joint** on the {arm_label} — the arm that moves is picked automatically."
+        )
+        rec.send_blueprint(rrb.Blueprint(rrb.TextDocumentView(origin="/instructions", name="Instructions"), collapse_panels=True), make_active=True)
+        port = _pick_arm_by_wiggle(ports)
     usb_id = usb_id_from_port(port)
     out_path = config.calibration_dir / f"{usb_id}.json"
 
-    rec = config.rr_config.rec
-    is_leader = config.kind == "leader"
     urdf_path = LEADER_URDF_PATH if is_leader else FOLLOWER_URDF_PATH
     target = UrdfArm.create("target", fallback_calibration(), rec=rec, urdf_path=urdf_path, translation=(0.0, 0.0, 0.0), color=(0.5, 0.5, 0.5))
-
-    def send_view(*arms: UrdfArm) -> None:
-        rec.send_blueprint(
-            rrb.Blueprint(
-                rrb.Spatial3DView(
-                    name="calibration",
-                    origin="/",
-                    overrides={arm.collision_geometries_path: rrb.EntityBehavior(visible=False) for arm in arms},
-                ),
-                collapse_panels=True,
-            ),
-            make_active=True,
-        )
-
-    send_view(target)
+    instruct(
+        f"## Step 1 of 2 — match the target pose\n\n"
+        f"Move your **{arm_label}** by hand to match the **gray target**: every joint at the middle of its range of motion. "
+        f"This pose becomes 0° for every joint.\n\n"
+        f"When it matches, continue (or press Enter in the terminal)."
+    )
+    send_view("1/2", target)
     bus = FeetechBus(port)
     feed = _LiveArmFeed(bus, rec)
     half_rev = TICKS_PER_REV // 2  # ticks per 180 deg, so calibrated values come out in degrees
@@ -251,6 +290,7 @@ def main(config: CalibrateConfig) -> None:
     try:
         rec.set_time("time", timestamp=time.time())
         target.log_pose(rec, list(target.center_angles_rad))
+        announce_phase("middle")
         input("1/2  move the arm to the MIDDLE of its range of motion (match the gray target), then press Enter...")
         feed.require_responding()  # make sure the arm is actually answering before touching EEPROM
         # Half-turn homing (lerobot): written to the servos, so KEEP THE ARM STILL here.
@@ -271,12 +311,20 @@ def main(config: CalibrateConfig) -> None:
         ]
         live = UrdfArm.create("live", display, rec=rec, urdf_path=urdf_path, translation=(0.0, -0.4, 0.0), color=MATTE_BLACK)
         feed.attach_urdf(live, display)
-        send_view(target, live)
         print("     middle pose captured — the black model now mirrors your arm live")
 
         grip = "squeeze/release the trigger fully" if is_leader else "fully close and open the gripper"
+        instruct(
+            f"## Step 2 of 2 — sweep every joint\n\n"
+            f"Move **every joint except wrist_roll** through its full range of motion ({grip} too). "
+            f"Watch MIN and MAX fill in as you go — each joint needs a decent sweep to count.\n\n"
+            f"When every joint is swept, continue (or press Enter in the terminal)."
+        )
+        send_view("2/2", target, live, table=True)
+        feed.show_ranges = True
         print(f"2/2  move every joint EXCEPT wrist_roll through its full range of motion ({grip} too).")
         print("     recording positions — press Enter to stop...")
+        announce_phase("sweep")
         _sweep_until_enter(feed)
         range_min, range_max = list(feed.range_min), list(feed.range_max)
         range_min[WRIST_ROLL_INDEX], range_max[WRIST_ROLL_INDEX] = 0, TICKS_PER_REV - 1
@@ -330,4 +378,5 @@ def main(config: CalibrateConfig) -> None:
         print(f"{name}: middle={raw_middle[i]} range=[{range_min[i]}, {range_max[i]}] (span {span_deg:.0f} deg)")
 
     save_calibration(out_path, calibration, kind=config.kind, range_min=range_min, range_max=range_max)
+    instruct(f"## {arm_label.capitalize()} calibrated ✓\n\nSaved to `{out_path}` (and to the servos themselves).")
     print(f"\nwrote {out_path} — verify with: pixi run log-so100")

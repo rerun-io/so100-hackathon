@@ -23,6 +23,7 @@ from pathlib import Path
 import rerun as rr
 
 from so100_hackathon.calibration import CalibMode, MotorCalibration
+from so100_hackathon.cameras import FrameSink
 
 FOLLOWER_URDF_PATH = Path(__file__).parents[2] / "data" / "so100" / "so100.urdf"
 LEADER_URDF_PATH = Path(__file__).parents[2] / "data" / "so101_leader" / "so101_leader.urdf"
@@ -148,7 +149,7 @@ class UrdfArm:
         # angle, which floods stdout on uncalibrated arms.
         return min(max(angle, joint.limit_lower), joint.limit_upper)
 
-    def log_joints(self, rec: rr.RecordingStream, calibrated_values: list[float]) -> None:
+    def log_joints(self, rec: FrameSink, calibrated_values: list[float]) -> None:
         for joint in self.joints:
             joint_index = int(joint.name) - 1
             angle = self.joint_angle_rad(joint_index, calibrated_values[joint_index])
