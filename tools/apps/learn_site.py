@@ -134,10 +134,7 @@ def _shell(*, title: str, nav_html: str, article_html: str) -> str:
     )
     # Header + stepper share one sticky wrapper so the condensed state (learn2.js)
     # can slide the header away and dock the stepper with a single transform.
-    chrome = (
-        f'<div class="chrome">\n{header}\n'
-        f'<nav class="stepper-nav" aria-label="Course steps">{nav_html}</nav>\n</div>\n<div class="layout">'
-    )
+    chrome = f'<div class="chrome">\n{header}\n<nav class="stepper-nav" aria-label="Course steps">{nav_html}</nav>\n</div>\n<div class="layout">'
     return f"""<!doctype html>
 <html lang="en">
 <head>
