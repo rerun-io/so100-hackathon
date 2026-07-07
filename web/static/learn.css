@@ -1,6 +1,7 @@
 /* SO-100 hackathon course site — hand-written approximation of the rerun.io/learn look. */
 
 :root {
+  color-scheme: light dark;
   --bg: #ffffff;
   --fg: #11181c;
   --subtle: #4b545a;
@@ -8,12 +9,38 @@
   --border: #e5e8ea;
   --border-strong: #c8cED2;
   --code-bg: #f5f7f8;
+  --header-bg: rgba(255, 255, 255, 0.9);
   --primary: #e5541c;
   --primary-soft: rgba(229, 84, 28, 0.16);
   --action: #2563eb;
   --action-hover: #1d4fd7;
+  --ok-bg: #e5f4e9;
+  --ok-border: #b5dfc0;
+  --ok-fg: #1d7a36;
+  --error: #c02626;
   --radius: 10px;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1215;
+    --fg: #e3e8eb;
+    --subtle: #aeb8be;
+    --muted: #7f8a91;
+    --border: #262e33;
+    --border-strong: #3d474e;
+    --code-bg: #171d21;
+    --header-bg: rgba(14, 18, 21, 0.9);
+    --primary: #ff764a;
+    --primary-soft: rgba(255, 118, 74, 0.22);
+    --action: #3b82f6;
+    --action-hover: #5a95f8;
+    --ok-bg: #142a1b;
+    --ok-border: #235c34;
+    --ok-fg: #52c272;
+    --error: #f26d6d;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -38,7 +65,7 @@ body {
   gap: 0.75rem;
   height: 3.25rem;
   padding: 0 1.5rem;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--header-bg);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
   align-items: center;
@@ -307,12 +334,12 @@ th { background: var(--code-bg); }
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  background: #e5f4e9;
-  border: 1px solid #b5dfc0;
-  color: #1d7a36;
+  background: var(--ok-bg);
+  border: 1px solid var(--ok-border);
+  color: var(--ok-fg);
   white-space: nowrap;
 }
-.setup-error { margin: 0; color: #c02626; font-size: 0.82rem; }
+.setup-error { margin: 0; color: var(--error); font-size: 0.82rem; }
 .setup .viewer-box {
   flex: 1;
   min-width: 0;
@@ -348,7 +375,7 @@ th { background: var(--code-bg); }
   gap: 0.5rem;
   margin-top: 0.6rem;
   font-size: 0.8rem;
-  color: #7c868d;
+  color: var(--muted);
 }
 
 /* ── Collect widget (Recording / Livestream tabs, episode side panel + viewer) ─ */
@@ -474,7 +501,7 @@ th { background: var(--code-bg); }
 }
 /* Episode state: nothing (upcoming), a blinking red dot (recording), a green ✓ (saved). */
 .episode-glyph { display: inline-flex; align-items: center; }
-.episode-glyph.saved { color: #1d7a36; }
+.episode-glyph.saved { color: var(--ok-fg); }
 .episode-glyph.rec::after {
   content: "";
   width: 8px;
@@ -499,9 +526,9 @@ th { background: var(--code-bg); }
 }
 .save-btn:hover:not(:disabled) { border-color: var(--fg); }
 .save-btn:disabled { opacity: 0.45; cursor: default; }
-.save-btn.saved { border-color: #b5dfc0; background: #e5f4e9; color: #1d7a36; opacity: 1; }
+.save-btn.saved { border-color: var(--ok-border); background: var(--ok-bg); color: var(--ok-fg); opacity: 1; }
 
-.episode-note { color: #1d7a36; font-size: 0.78rem; line-height: 1.4; }
+.episode-note { color: var(--ok-fg); font-size: 0.78rem; line-height: 1.4; }
 
 .panel-buttons {
   display: flex;
@@ -510,8 +537,8 @@ th { background: var(--code-bg); }
   margin-top: auto;
 }
 .panel-buttons .collect-btn, .panel-live .collect-btn { justify-content: center; }
-.stop-btn:not(:disabled) { background: #11181c; border-color: #11181c; color: #fff; }
-.stop-btn:not(:disabled):hover { border-color: #11181c; opacity: 0.9; }
+.stop-btn:not(:disabled) { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+.stop-btn:not(:disabled):hover { border-color: var(--fg); opacity: 0.9; }
 
 .live-sub { margin: 0; font-size: 0.85rem; line-height: 1.5; color: var(--subtle); }
 
@@ -568,7 +595,7 @@ th { background: var(--code-bg); }
   cursor: pointer;
   white-space: nowrap;
 }
-.status-error { color: #c02626; font-size: 0.82rem; padding: 0.4rem 1.3rem 0; }
+.status-error { color: var(--error); font-size: 0.82rem; padding: 0.4rem 1.3rem 0; }
 .collect-panel .status-error { padding: 0 1.1rem 0.9rem; }
 
 .collect .viewer-box {
@@ -584,6 +611,6 @@ th { background: var(--code-bg); }
   align-items: center;
   gap: 0.45rem;
   font-size: 0.8rem;
-  color: #7c868d;
+  color: var(--muted);
   cursor: pointer;
 }
