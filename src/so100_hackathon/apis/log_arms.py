@@ -25,7 +25,7 @@ import rerun as rr
 
 from so100_hackathon.blueprint import create_blueprint
 from so100_hackathon.calibration import MotorCalibration, fallback_calibration, load_arm_kind, load_arm_ranges, load_calibration
-from so100_hackathon.cameras import CameraStreamer, detect_camera_indices
+from so100_hackathon.cameras import DEFAULT_VIDEO_ENCODER, CameraStreamer, detect_camera_indices
 from so100_hackathon.feetech import FeetechBus, MotorTelemetry, detect_arm_ports, usb_id_from_port
 from so100_hackathon.rerun_config import LiveViewerConfig
 from so100_hackathon.urdf_arm import FOLLOWER_URDF_PATH, LEADER_URDF_PATH, MATTE_BLACK, UrdfArm
@@ -99,8 +99,12 @@ class LogArmsConfig:
     """URDF joint angles (deg) at calibrated zero. Default: midpoint of each joint's limits (the calibration reference pose)."""
     cameras: tuple[int, ...] | None = None
     """Camera indices to stream. Default: probe indices 0-4 and use whatever responds. Pass --cameras (empty) to disable."""
+    video_encoder: str | None = DEFAULT_VIDEO_ENCODER
+    """H.264 encoder for the camera video streams: libx264 (zero added latency) or
+    h264_videotoolbox (Apple hardware, near-zero CPU but ~4 frames of latency).
+    None logs per-frame JPEG instead of video."""
     jpeg_quality: int = 75
-    """JPEG quality for camera frames."""
+    """JPEG quality for camera frames (only used with --video-encoder None)."""
     teleop: bool = False
     """Drive the follower to mirror the leader (torque ON on the follower). Leader positions
     pass through both arms' calibrations, so both arms must be calibrated. Goals are clamped
@@ -245,7 +249,7 @@ class ArmSession:
         self.rec = rec
         self.arms = _open_arms(config, rec)
         camera_indices = detect_camera_indices() if config.cameras is None else config.cameras
-        self.streamers = [CameraStreamer(index, rec=rec, jpeg_quality=config.jpeg_quality) for index in camera_indices]
+        self.streamers = [CameraStreamer(index, rec=rec, encoder=config.video_encoder, jpeg_quality=config.jpeg_quality) for index in camera_indices]
         self._reconnect_every = max(1, int(config.fps))  # attempt a reconnect roughly once a second
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -407,7 +411,7 @@ def main(config: LogArmsConfig) -> None:
         rec.log(f"{follower_arm.name}/goal", rr.SeriesLines(names=goal_names), static=True)
 
     camera_indices = detect_camera_indices() if config.cameras is None else config.cameras
-    streamers = [CameraStreamer(index, rec=rec, jpeg_quality=config.jpeg_quality) for index in camera_indices]
+    streamers = [CameraStreamer(index, rec=rec, encoder=config.video_encoder, jpeg_quality=config.jpeg_quality) for index in camera_indices]
     for streamer in streamers:
         streamer.start()
 

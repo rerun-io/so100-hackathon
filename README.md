@@ -40,11 +40,18 @@ What gets logged, per arm (named by USB id unless you pass `--names leader follo
 | `<arm>/position` | calibrated degrees (gripper: 0-100%), one series per joint |
 | `<arm>/position_raw`, `speed`, `load`, `current`, `voltage`, `temperature` | raw servo telemetry |
 | `<arm>/so_arm100/...` | URDF meshes, animated from live joints |
-| `camera/cam<N>` | JPEG-compressed webcam frames (threads, wall-clock timestamps) |
+| `camera/cam<N>` | H.264 video stream of each webcam (threads, wall-clock timestamps) |
 
 Useful flags: `--fps 60`, `--cameras 1 2` (pick specific cameras; `--cameras` alone disables),
 `--no-urdf`, `--seconds 10`, `--rr-config.headless` (required in shells without a display,
 otherwise logging wedges when the viewer can't spawn).
+
+Camera frames are encoded to an H.264 `rr.VideoStream` (~10x smaller recordings than the
+old per-frame JPEG). `--video-encoder h264_videotoolbox` switches to Apple's hardware
+encoder (near-zero CPU, but it pipelines ~4 frames of latency into the live view);
+`--video-encoder None` falls back to per-frame JPEG (`--jpeg-quality`). Note the *viewer*
+decodes H.264 with an `ffmpeg` binary (≥5.1) from its PATH — viewers spawned by these
+tools inherit the pixi env's ffmpeg, but a separately-launched viewer needs its own.
 
 ## Calibrate
 
