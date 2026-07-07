@@ -31,10 +31,12 @@ pyobjc-framework-avfoundation = "*"
 
 [tool.pixi.pypi-dependencies]
 so100_hackathon = { path = ".", editable = true }
-# rerun-sdk from PyPI: conda-forge lags behind (0.34 not packaged there yet).
-rerun-sdk = "==0.34.0"
+# Pinned back to 0.33.1: the 0.34 web viewer cannot talk grpc-web to `rr.server.Server`
+# (tonic-web-wasm-client 0.8.0 drops the grpc-status trailer; strict tonic 0.14 rejects
+# the stream). Restore 0.34 once RR-5147 ships in a release.
+rerun-sdk = "==0.33.1"
 feetech-servo-sdk = ">=1.0.0"
-datafusion = ">=53,<54"
+datafusion = ">=52,<53"  # rerun-sdk 0.33 requires datafusion major 52
 markdown = ">=3.6"
 
 # LeRobot pins an older rerun-sdk which conflicts with ours, so the export env is fully
@@ -94,6 +96,7 @@ export = { features = ["export"], no-default-feature = true }
 [tool.pixi.tasks.so100-server]
 cmd = "python tools/apps/so100_server.py"
 description = "Long-lived local data server: gRPC proxy + catalog (re-registers recordings/ on startup) + control API for recording episodes (--fake for camera-only)"
+env = { RUST_BACKTRACE = "1" }
 
 [tool.pixi.tasks.learn]
 cmd = "python tools/apps/learn_site.py"
