@@ -54,6 +54,15 @@ lerobot = "==0.4.2"
 cmd = "python tools/apps/export_lerobot.py"
 description = "Export a recorded dataset to LeRobot v3 under datasets/ (--push to upload to the Hugging Face Hub)"
 
+# RealSense RGB+depth capture. Separate solve group: pyrealsense2's python-version
+# builds must not constrain the default environment's lock.
+[tool.pixi.feature.realsense.dependencies]
+pyrealsense2 = "*"
+
+[tool.pixi.feature.realsense.tasks.realsense-debug]
+cmd = "python tools/apps/realsense_debug.py"
+description = "Debug: stream RealSense color + depth into a Rerun viewer (standalone, no arms needed)"
+
 [tool.pixi.feature.dev.dependencies]
 ruff = "*"
 pytest = ">=8.0.0,<9"
@@ -93,6 +102,7 @@ description = "Find dead code in the package"
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 export = { features = ["export"], no-default-feature = true }
+realsense = { features = ["realsense"] }
 
 [tool.pixi.tasks.so100-server]
 cmd = "python tools/apps/so100_server.py"

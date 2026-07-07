@@ -1,0 +1,143 @@
+"""Stream Intel RealSense color + depth into a Rerun viewer (standalone debug tool).
+
+Runs in the isolated ``realsense`` pixi environment (pyrealsense2 from conda-forge,
+no arms needed). The depth sensor is treated as the origin; the color camera hangs
+off it via the factory extrinsics, so the 3D view fuses the depth cloud with color::
+
+    pixi run -e realsense realsense-debug                     # spawn a viewer, Ctrl-C to stop
+    pixi run -e realsense realsense-debug -- --seconds 10
+    pixi run -e realsense realsense-debug -- --rr-config.save realsense.rrd
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import time
+
+import numpy as np
+import pyrealsense2 as rs
+import rerun as rr
+import tyro
+
+from so100_hackathon.rerun_config import LiveViewerConfig
+
+DEPTH_ENTITY = "realsense/depth/image"
+RGB_ENTITY = "realsense/rgb/image"
+
+
+@dataclasses.dataclass
+class Config:
+    rr_config: LiveViewerConfig
+    """Rerun viewer/save/connect wiring."""
+
+    width: int = 640
+    """Stream width for both color and depth."""
+
+    height: int = 480
+    """Stream height for both color and depth."""
+
+    fps: int = 30
+    """Frames per second requested from the camera."""
+
+    jpeg_quality: int = 90
+    """JPEG quality for the logged color frames."""
+
+    seconds: float | None = None
+    """Stop after this many seconds (default: run until Ctrl-C)."""
+
+    serial: str | None = None
+    """Serial number of the device to open (default: first RealSense found)."""
+
+
+def _require_device(serial: str | None) -> rs.device:
+    devices = list(rs.context().query_devices())
+    if not devices:
+        raise SystemExit(
+            "no RealSense device found -- check the USB connection (use the camera's own USB 3 "
+            "cable, avoid hubs) and verify it shows up with an Intel vendor id in "
+            "`ioreg -p IOUSB -w0`"
+        )
+    for device in devices:
+        if serial is None or device.get_info(rs.camera_info.serial_number) == serial:
+            return device
+    known = ", ".join(d.get_info(rs.camera_info.serial_number) for d in devices)
+    raise SystemExit(f"no RealSense with serial {serial!r} (connected: {known})")
+
+
+def _log_camera_models(rec: rr.RecordingStream, profile: rs.pipeline_profile) -> None:
+    """Log the static scene: view coordinates, both pinholes, and the depth->color extrinsics."""
+    rec.log("realsense", rr.ViewCoordinates.RDF, static=True)
+
+    depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
+    rgb_profile = profile.get_stream(rs.stream.color).as_video_stream_profile()
+
+    for entity, stream in ((DEPTH_ENTITY, depth_profile), (RGB_ENTITY, rgb_profile)):
+        intrinsics = stream.get_intrinsics()
+        rec.log(
+            entity,
+            rr.Pinhole(
+                resolution=[intrinsics.width, intrinsics.height],
+                focal_length=[intrinsics.fx, intrinsics.fy],
+                principal_point=[intrinsics.ppx, intrinsics.ppy],
+            ),
+            static=True,
+        )
+
+    # The depth sensor is the origin of the `realsense` space, so only the color
+    # camera needs extrinsics.
+    rgb_from_depth = depth_profile.get_extrinsics_to(rgb_profile)
+    rec.log(
+        "realsense/rgb",
+        rr.Transform3D(
+            translation=rgb_from_depth.translation,
+            mat3x3=np.reshape(rgb_from_depth.rotation, (3, 3)),
+            relation=rr.TransformRelation.ChildFromParent,
+        ),
+        static=True,
+    )
+
+
+def main(config: Config) -> None:
+    rec = config.rr_config.rec
+    device = _require_device(config.serial)
+    name = device.get_info(rs.camera_info.name)
+    serial = device.get_info(rs.camera_info.serial_number)
+    print(f"streaming from {name} (serial {serial}) at {config.width}x{config.height}@{config.fps}")
+
+    rs_config = rs.config()
+    rs_config.enable_device(serial)
+    rs_config.enable_stream(rs.stream.depth, config.width, config.height, rs.format.z16, config.fps)
+    rs_config.enable_stream(rs.stream.color, config.width, config.height, rs.format.rgb8, config.fps)
+
+    pipeline = rs.pipeline()
+    profile = pipeline.start(rs_config)
+    frame_count = 0
+    try:
+        _log_camera_models(rec, profile)
+        deadline = None if config.seconds is None else time.monotonic() + config.seconds
+        while deadline is None or time.monotonic() < deadline:
+            frames = pipeline.wait_for_frames()
+            rec.set_time("time", timestamp=time.time())
+
+            depth_frame = frames.get_depth_frame()
+            if depth_frame:
+                depth = np.asanyarray(depth_frame.get_data())
+                # `meter` is depth units per meter: z16 at the default 1mm scale -> 1000.
+                rec.log(DEPTH_ENTITY, rr.DepthImage(depth, meter=1.0 / depth_frame.get_units()))
+
+            color_frame = frames.get_color_frame()
+            if color_frame:
+                color = np.asanyarray(color_frame.get_data())
+                rec.log(RGB_ENTITY, rr.Image(color).compress(jpeg_quality=config.jpeg_quality))
+
+            frame_count += 1
+            if frame_count % (config.fps * 5) == 0:
+                print(f"{frame_count} frames logged")
+    except KeyboardInterrupt:
+        print(f"\nstopped after {frame_count} frames")
+    finally:
+        pipeline.stop()
+
+
+if __name__ == "__main__":
+    main(tyro.cli(Config))
