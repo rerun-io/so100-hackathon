@@ -69,6 +69,10 @@ description = "Debug: stream RealSense color + depth into a Rerun viewer (standa
 # (idempotent — rr.spawn is a no-op when a viewer already owns the port), then the
 # sudo'd capture connects to it over gRPC. Passwordless setup: see the sudoers note
 # in tools/apps/realsense_debug.py.
+[tool.pixi.feature.realsense.tasks.realsense-sudo-setup]
+cmd = "python tools/apps/realsense_sudo_setup.py"
+description = "One-time macOS setup: passwordless sudo for the realsense capture (prompts for your password once)"
+
 [tool.pixi.feature.realsense.tasks._realsense-viewer]
 cmd = "python -c 'import rerun as rr; rr.spawn(connect=False, recording=rr.RecordingStream(\"so100\"))'"
 description = "internal: ensure a Rerun viewer is running as the login user"
