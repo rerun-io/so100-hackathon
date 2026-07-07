@@ -6,10 +6,10 @@
 //   <div data-collect></div>  -> the collect card: Recording / Livestream tabs, an episode
 //                                side panel, and the viewer, driving the server's control
 //                                API (http://localhost:8000)
-//   <div data-setup="ping|calibrate|teleop"></div>
-//                             -> one Set-up step: header with action buttons + a viewer
-//                                showing the tool's live feed (the server runs the same
-//                                CLI tool as a subprocess via POST /setup/*)
+//   <div data-setup></div>    -> the Set-up card: an accordion with one section per
+//                                step (ping / calibrate / teleop) next to ONE shared
+//                                viewer showing the running tool's live feed (the server
+//                                runs the same CLI tools as subprocesses via POST /setup/*)
 //
 // The site itself is static: everything below talks to the *local* long-lived server
 // (`pixi run so100-server`). When it's down, widgets show a hint and keep retrying.
@@ -82,20 +82,25 @@ function wireCopy(button, text) {
 
 // ---- embedded viewer ---------------------------------------------------------------
 
-// The viewer autofocuses its <canvas>, and a plain focus() scrolls the canvas into
-// view -- yanking the page (on boot AND when leaving fullscreen). Override focus() the
-// moment the canvas is inserted so focusing never scrolls; keyboard input still works.
-function preventFocusScroll(parent) {
-  const observer = new MutationObserver(() => {
-    const canvas = parent.querySelector("canvas");
-    if (!canvas) return;
-    const original = HTMLElement.prototype.focus;
-    canvas.focus = function (opts) {
-      original.call(this, { ...opts, preventScroll: true });
-    };
-    observer.disconnect();
+// The viewer grabs keyboard focus for its <canvas> two ways, and both scroll the
+// canvas into view -- yanking the page on boot and when leaving fullscreen:
+//   1. plain .focus() calls -> patched on the prototype (once, at load; a per-canvas
+//      patch after insertion loses the race on first boot) to pass preventScroll.
+//   2. it sets canvas.autofocus = true -> the browser then focuses the canvas
+//      internally on insertion, bypassing .focus() entirely. No preventScroll hook
+//      exists for that path, so the attribute is neutered outright.
+// Keyboard input still works: clicking the viewer focuses it (without scrolling, per 1).
+{
+  const original = HTMLCanvasElement.prototype.focus;
+  HTMLCanvasElement.prototype.focus = function (opts) {
+    original.call(this, { ...opts, preventScroll: true });
+  };
+  Object.defineProperty(HTMLCanvasElement.prototype, "autofocus", {
+    get() {
+      return false;
+    },
+    set() {},
   });
-  observer.observe(parent, { childList: true, subtree: true });
 }
 
 // NOTE: width/height must stay "" -- the canvas is sized by CSS (.viewer-box canvas).
@@ -185,7 +190,6 @@ function viewerSlot(box) {
     const { WebViewer } = await import("/viewer/index.js");
     if (gen !== bootGen) return; // hidden (or re-shown) while the module loaded
     viewer = new WebViewer();
-    preventFocusScroll(box);
     await viewer.start(proxyUrl, box, VIEWER_OPTIONS);
     if (gen !== bootGen) return;
     if (queuedFocus) {
@@ -286,7 +290,6 @@ function bootViewer(box) {
     const { WebViewer } = await import("/viewer/index.js");
     const viewer = new WebViewer();
     box.querySelector(".viewer-overlay")?.remove();
-    preventFocusScroll(box);
     await viewer.start(PROXY_URL, box, VIEWER_OPTIONS);
     return viewer;
   })();
@@ -299,31 +302,36 @@ function initViewer(root) {
   bootViewer(box);
 }
 
-// ---- setup step widgets -------------------------------------------------------------
+// ---- setup accordion widget ---------------------------------------------------------
 
+// One card for the whole hardware checklist: a left accordion (one section per step)
+// next to ONE shared viewer. Only one setup tool can run at a time server-side --
+// starting a step while another runs stops the running one first (for calibrate that
+// means the interrupted run writes no calibration file). Calibrate's done state is
+// server-tracked (the badge); ping and teleop are judged by the human.
 const SETUP_STEPS = {
   ping: {
-    num: 1,
-    title: "Test if your arms are connected",
-    sub: "Plug in both arms. Ping, wiggle a joint by hand and watch it move.",
+    name: "Ping",
+    desc:
+      "Plug in both arms, then ping: a live feed will open. Wiggle a joint by hand and watch it move.",
     action: "PING!",
-    cmd: "pixi run log-so100",
     stopLabel: "STOP THE FEED",
   },
   calibrate: {
-    num: 2,
-    title: "Calibrate your arms",
-    sub: "Each arm is calibrated separately in 2 steps. Start with the leader arm.",
-    action: "START CALIBRATING LEADER ARM",
-    cmd: "pixi run calibrate-so100 leader",
+    name: "Calibrate",
+    desc:
+      "Each arm is calibrated once, and it survives replugging. The leader arm goes first; " +
+      "the follower starts automatically after it.",
+    action: "START CALIBRATING",
     stopLabel: "STOP CALIBRATING",
   },
   teleop: {
-    num: 3,
-    title: "Verify teleop",
-    sub: "Drive it around, check every joint tracks. This is the mode you'll record in.",
+    name: "Verify teleop",
+    desc:
+      "Torque turns on and the follower mirrors the leader (it glides to the leader's pose rather " +
+      "than jumping). Drive it around and check every joint tracks \u2014 this is exactly the mode " +
+      "you'll record in. Stopping the feed releases the follower's torque.",
     action: "START LIVE TELEOPERATING",
-    cmd: "pixi run teleop-so100",
     stopLabel: "STOP THE FEED",
   },
 };
@@ -336,108 +344,217 @@ function calibrateNextLabel(setup) {
   return null;
 }
 
-function initSetup(root) {
-  const tool = root.dataset.setup;
-  const step = SETUP_STEPS[tool];
-  if (!step) return;
+// Phase-contextual guidance shown in the calibrate section while it runs -- the single
+// highest-value teaching moment, swapped in place of the static description.
+function calibrateGuidance(setup) {
+  const arm = setup.arm === "follower" ? "follower" : "leader";
+  if (setup.phase === "wiggle") {
+    return `Wiggle the ${arm} arm so the right port is picked \u2014 it advances by itself.`;
+  }
+  if (setup.phase === "middle") {
+    return `Match the gray target pose with the ${arm} arm (this defines 0\u00b0 for every joint), then press NEXT STEP.`;
+  }
+  if (setup.phase === "sweep") {
+    return (
+      `Sweep every ${arm} joint through its full range of motion \u2014 including fully ` +
+      `opening/closing the gripper \u2014 then press ${arm === "leader" ? "NEXT ARM" : "FINISH"}.`
+    );
+  }
+  return null;
+}
 
+const CHEVRON_SVG =
+  '<svg class="setup-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+  ' stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+
+function initSetup(root) {
   const wrap = document.createElement("div");
   wrap.className = "setup";
+  const sectionsHtml = Object.entries(SETUP_STEPS)
+    .map(
+      ([tool, step]) => `
+    <section class="setup-step" data-tool="${tool}">
+      <div class="setup-step-bar">
+        <button type="button" class="setup-step-head" aria-expanded="false">
+          ${CHEVRON_SVG}
+          <span class="setup-step-title">${step.name}</span>
+          <span class="setup-live" hidden></span>
+          <span class="setup-badge" hidden>&#10003; Calibrated</span>
+        </button>
+        <button type="button" class="collect-btn outline setup-head-stop" hidden>
+          <span class="stop-square"></span>STOP</button>
+      </div>
+      <div class="setup-step-body" hidden>
+        <p class="setup-step-desc">${step.desc}</p>
+        <div class="setup-step-buttons">
+          <button type="button" class="collect-btn primary setup-start" disabled>${step.action}</button>
+          <button type="button" class="collect-btn primary setup-next" hidden></button>
+          <button type="button" class="collect-btn outline setup-stop" hidden>
+            <span class="stop-square"></span>${step.stopLabel}</button>
+        </div>
+        <p class="setup-error" hidden></p>
+      </div>
+    </section>`,
+    )
+    .join("");
   wrap.innerHTML = `
-    <div class="setup-head">
-      <div>
-        <div class="setup-title">${step.num}. ${step.title}</div>
-        <div class="setup-sub">${step.sub}</div>
+    <div class="setup-body">
+      <div class="setup-panel">${sectionsHtml}</div>
+      <div class="viewer-box">
+        <div class="viewer-overlay">
+          <div class="overlay-title">No tool running</div>
+          <div class="overlay-sub">start a step on the left &mdash; its live feed appears here</div>
+          <div class="setup-offline"><span class="spinner"></span> waiting for the local data server&hellip;
+            <code>pixi run so100-server</code></div>
+          <div class="setup-busy" hidden>the arms are connected on the Collect page &mdash; disconnect them there first</div>
+        </div>
+        <div class="viewer-loading" hidden><span class="spinner"></span> starting the feed&hellip;</div>
       </div>
-      <div class="setup-actions">
-        <span class="setup-badge" hidden>&#10003; Calibrated</span>
-        <button type="button" class="setup-next" hidden></button>
-        <button type="button" class="setup-stop" hidden>${step.stopLabel}</button>
-      </div>
-    </div>
-    <div class="setup-error" hidden></div>
-    <div class="viewer-box">
-      <div class="viewer-overlay">
-        <button type="button" class="setup-action" disabled>${step.action}</button>
-        <div class="overlay-cmd">or copy the command in your terminal&nbsp;<code>${step.cmd}</code>
-          <button type="button" class="copy-btn" title="Copy command">Copy</button></div>
-        <div class="setup-offline"><span class="spinner"></span> waiting for the local data server&hellip;
-          <code>pixi run so100-server</code></div>
-        <div class="setup-busy" hidden>the arms are connected on the Collect page &mdash; disconnect them there first</div>
-      </div>
-      <div class="viewer-loading" hidden><span class="spinner"></span> starting the feed&hellip;</div>
     </div>`;
   root.replaceWith(wrap);
 
-  const el = (selector) => wrap.querySelector(selector);
-  const actionBtn = el(".setup-action");
-  const nextBtn = el(".setup-next");
-  const stopBtn = el(".setup-stop");
-  const badge = el(".setup-badge");
-  const errorLine = el(".setup-error");
-  const offlineLine = el(".setup-offline");
-  const busyLine = el(".setup-busy");
-  wireCopy(el(".copy-btn"), step.cmd);
+  const offlineLine = wrap.querySelector(".setup-offline");
+  const busyLine = wrap.querySelector(".setup-busy");
 
-  // This widget owns its viewer: booted (against the run's throwaway proxy) when its
-  // tool starts, stopped when the tool ends. Only one setup tool runs at a time.
-  const slot = viewerSlot(el(".viewer-box"));
-  let wasRunning = false;
-  let localError = ""; // from this widget's own requests (subprocess failures come via setup.error)
+  const sections = {};
+  for (const sectionEl of wrap.querySelectorAll(".setup-step")) {
+    const tool = sectionEl.dataset.tool;
+    const q = (selector) => sectionEl.querySelector(selector);
+    sections[tool] = {
+      el: sectionEl,
+      head: q(".setup-step-head"),
+      body: q(".setup-step-body"),
+      live: q(".setup-live"),
+      badge: q(".setup-badge"),
+      headStop: q(".setup-head-stop"),
+      start: q(".setup-start"),
+      next: q(".setup-next"),
+      stop: q(".setup-stop"),
+      desc: q(".setup-step-desc"),
+      error: q(".setup-error"),
+    };
+  }
+
+  // The shared viewer: booted against the running tool's throwaway proxy, stopped when
+  // the tool ends.
+  const slot = viewerSlot(wrap.querySelector(".viewer-box"));
+  let shown = false;
+  let wasRunning = null; // tool name that was running on the previous render
+  let openTool = null;
+  let autoOpened = false;
+  let lastStatus = null;
+  const localErrors = { ping: "", calibrate: "", teleop: "" };
+
+  function setOpen(tool) {
+    openTool = tool;
+    for (const [t, s] of Object.entries(sections)) {
+      const open = t === tool;
+      s.el.classList.toggle("open", open);
+      s.head.setAttribute("aria-expanded", String(open));
+      s.body.hidden = !open;
+    }
+  }
 
   function render(status) {
+    lastStatus = status;
     const online = status !== null;
     const setup = (online && status.setup) || {};
-    const mine = setup.tool === tool;
-    const running = Boolean(setup.running && mine);
+    const running = setup.running ? setup.tool : null;
     const armsBusy = online && status.arms !== "disconnected";
+    const calibrated = Boolean(setup.calibrated?.leader && setup.calibrated?.follower);
 
-    actionBtn.disabled = !online || Boolean(setup.running) || armsBusy;
+    if (online && !autoOpened) {
+      // First contact: open the running tool, else the first incomplete step.
+      autoOpened = true;
+      setOpen(running || (calibrated ? "teleop" : "ping"));
+    }
+    if (running && running !== wasRunning) {
+      setOpen(running); // a tool just started (here, another tab, or the CLI): surface it
+      localErrors[running] = "";
+    }
+
+    for (const [tool, s] of Object.entries(sections)) {
+      const step = SETUP_STEPS[tool];
+      const mineRunning = running === tool;
+      const open = openTool === tool;
+      s.el.classList.toggle("running", mineRunning);
+      s.live.hidden = !mineRunning;
+      // STOP must never hide behind an expand click: collapsed running sections keep
+      // one in the header row.
+      s.headStop.hidden = !(mineRunning && !open);
+      s.badge.hidden = !(tool === "calibrate" && !mineRunning && calibrated);
+
+      // Starting is allowed even while another tool runs -- the handler stops it first.
+      s.start.hidden = mineRunning;
+      s.start.disabled = !online || armsBusy;
+      const nextLabel = mineRunning && tool === "calibrate" ? calibrateNextLabel(setup) : null;
+      s.next.hidden = nextLabel === null;
+      if (nextLabel !== null) s.next.textContent = nextLabel;
+      s.stop.hidden = !mineRunning;
+
+      const guidance = mineRunning && tool === "calibrate" ? calibrateGuidance(setup) : null;
+      s.desc.textContent = guidance ?? step.desc;
+
+      if (mineRunning) localErrors[tool] = "";
+      const error = (setup.tool === tool && !mineRunning && setup.error) || localErrors[tool];
+      s.error.textContent = error;
+      s.error.hidden = !error;
+    }
+
+    // Global conditions live ONCE, in the shared overlay -- not per section.
     offlineLine.hidden = online;
     busyLine.hidden = !armsBusy;
 
-    const nextLabel = running && tool === "calibrate" ? calibrateNextLabel(setup) : null;
-    nextBtn.hidden = nextLabel === null;
-    if (nextLabel !== null) nextBtn.textContent = nextLabel;
-    stopBtn.hidden = !running;
-    badge.hidden = !(tool === "calibrate" && !running && setup.calibrated?.leader && setup.calibrated?.follower);
-
-    if (running) localError = "";
-    const error = (mine && !running && setup.error) || localError;
-    errorLine.textContent = error;
-    errorLine.hidden = !error;
-
-    if (running && !wasRunning && setup.proxy_port) {
-      slot.show(`rerun+http://localhost:${setup.proxy_port}/proxy`);
+    if (!running && shown) {
+      slot.hide();
+      shown = false;
     }
-    if (!running && wasRunning) slot.hide();
+    if (running && running !== wasRunning && shown) {
+      slot.hide({ soft: true }); // direct tool-to-tool handoff: fresh proxy, no overlay flash
+      shown = false;
+    }
+    if (running && !shown && setup.proxy_port) {
+      slot.show(`rerun+http://localhost:${setup.proxy_port}/proxy`);
+      shown = true;
+    }
     // Calibrate spawns a NEW recording for the follower stage (and every re-run is a
     // new recording) -- the viewer keeps showing the old one unless told.
     if (running) slot.want(setup.recording_id);
     wasRunning = running;
   }
 
-  async function post(path, body) {
+  async function post(path, body, tool) {
     try {
       const next = await api(path, body);
-      if (next.error) localError = next.error;
+      if (next.error) localErrors[tool] = next.error;
       publishStatus(next);
     } catch (error) {
-      localError = `request failed: ${error}`;
+      localErrors[tool] = `request failed: ${error}`;
       publishStatus(null);
     }
   }
 
-  actionBtn.addEventListener("click", () => {
-    actionBtn.disabled = true;
-    localError = "";
-    post("/setup/start", { tool });
-  });
-  nextBtn.addEventListener("click", () => {
-    nextBtn.hidden = true; // hide until the tool reports the next phase
-    post("/setup/next", {});
-  });
-  stopBtn.addEventListener("click", () => post("/setup/stop", {}));
+  for (const [tool, s] of Object.entries(sections)) {
+    s.head.addEventListener("click", () => {
+      setOpen(openTool === tool ? null : tool);
+      render(lastStatus);
+    });
+    s.start.addEventListener("click", async () => {
+      s.start.disabled = true;
+      localErrors[tool] = "";
+      // Only one tool runs server-side: stop the current one first (an interrupted
+      // calibration writes no calibration file), then start this one.
+      if (wasRunning && wasRunning !== tool) await post("/setup/stop", {}, wasRunning);
+      post("/setup/start", { tool }, tool);
+    });
+    s.next.addEventListener("click", () => {
+      s.next.hidden = true; // hide until the tool reports the next phase
+      post("/setup/next", {}, tool);
+    });
+    const stop = () => post("/setup/stop", {}, tool);
+    s.stop.addEventListener("click", stop);
+    s.headStop.addEventListener("click", stop);
+  }
 
   subscribeStatus(render);
 }

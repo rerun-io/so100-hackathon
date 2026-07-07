@@ -1,69 +1,48 @@
 ---
-title: "Set up: test and calibrate your robot"
-section: The data collection loop
+title: "Set up"
 order: 2
-minutes: 15
-youllLearn:
-  - Starting the long-lived local data server
-  - Pinging your arms and watching live telemetry
-  - Calibrating the leader and follower arms from the page
-  - Verifying teleoperation before you record
 ---
 
-Time to make sure the hardware actually works: ping, calibrate, teleoperate. Every step on
-this page runs in the embedded Rerun viewers below — the buttons drive the exact same
-tools you could run in a terminal, so a command is shown next to each button if you prefer
-that.
+Make sure the hardware actually works: ping, calibrate, teleoperate. Every step on
+this page runs in the embedded [Rerun](https://rerun.io/) viewer. Every step could be run in a terminal, see repo's READ.me for the complete list.
 
-## First: start the local data server
+## First: Start the local data server
 
-Everything below (and the rest of the course) talks to one long-lived local process. In a
-terminal at the repo root:
+One process owns all your data today: it stores every episode and makes it queryable — powered by [Rerun](https://rerun.io/)'s open-source server. In a terminal at the repo root:
 
 ```bash
 pixi run so100-server
 ```
 
-Leave it running for the rest of the day. It hosts a live stream this site's embedded
-viewers connect to (port 9876), a catalog of all your recordings (port 51234), and a small
-control API that powers the buttons on this page and the Collect page (port 8000). It does
+Leave it running for the rest of the day. It hosts:
+
+* a live stream this site's embedded viewers connect to (port 9876)
+* a catalog of all your recordings (port 51234)
+* a small control API that powers the buttons on this page and the Collect page (port 8000)
+
+It does
 **not** hold the arms — the serial ports stay free, so the setup tools below (and your own
 terminal runs) can grab them anytime.
 
-As soon as it's up, the overlays below light up.
 
-## Smoke test
+## Set up your SO-100 arms
 
-Plug in both arms, then hit the button. A live feed opens with an animated URDF per arm
-plus joint telemetry — wiggle a joint by hand and watch it move. Stop the feed when
-convinced.
+If you've worked with SO-100 arms before you know they should be calibrated before using
+them to collect data. The card below walks you through it in three steps, all sharing one
+embedded [Rerun](https://rerun.io) viewer — only one tool runs at a time:
 
-<div data-setup="ping"></div>
+1. **Ping** — see if your machine recognizes the arms at all.
+2. **Calibrate** — walk through calibration, leader arm then follower.
+3. **Verify teleop** — test that teleoperation works as expected.
 
-Uncalibrated arms show up with a fallback calibration — poses will look wrong until the
-next step. That's expected.
+<div data-setup></div>
 
-## Calibrate
+Prefer the terminal? The same four tools, in order:
 
-Each arm is calibrated once. The viewer walks you through it: match the gray **target**
-pose (this defines 0° for every joint), then sweep every joint through its full range of
-motion — including fully opening/closing the gripper, or squeezing/releasing the leader's
-trigger. The leader arm goes first; the follower starts automatically after it.
-
-If both arms are plugged in, the first screen asks you to **wiggle** the arm you're about
-to calibrate so the right port is picked.
-
-<div data-setup="calibrate"></div>
-
-Calibration is written to `calibrations/<usb_id>.json` and to the servos themselves, so it
-survives replugging — the green badge above sticks around once both arms are done.
-
-## Verify teleoperation
-
-Torque turns on and the follower mirrors the leader (it glides to the leader's pose over
-~1.5 s rather than jumping). Drive it around and check every joint tracks — this is
-exactly the mode you'll record in. Stopping the feed releases the follower's torque.
-
-<div data-setup="teleop"></div>
-
-When mirroring feels right, move on to Collect.
+```bash
+pixi run so100-server              # the local data server (keep it running)
+pixi run log-so100                 # ping: stream live arm telemetry
+pixi run calibrate-so100 leader    # calibrate the leader
+pixi run calibrate-so100 follower  # calibrate the follower
+pixi run teleop-so100              # verify teleop: follower mirrors the leader
+```

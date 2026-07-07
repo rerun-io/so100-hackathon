@@ -1,12 +1,6 @@
 ---
 title: "Refine: enrich, query, curate"
-section: The data collection loop
-order: 4
-minutes: 15
-youllLearn:
-  - Listing your datasets and episodes with their metadata columns
-  - Filtering episodes by curation tag
-  - Pulling an episode's joint series into pandas
+order: 4 
 ---
 
 Everything you just recorded is queryable right now, through the catalog served by

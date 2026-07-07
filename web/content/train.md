@@ -1,12 +1,6 @@
 ---
 title: "Train: prepare for training"
-section: The data collection loop
 order: 5
-minutes: 15
-youllLearn:
-  - Exporting a dataset to the LeRobot v3 format
-  - What maps to what (state, action, task, videos)
-  - Pushing the dataset to the Hugging Face Hub
 ---
 
 Training stacks (LeRobot, and most policies built on it) consume the **LeRobot dataset

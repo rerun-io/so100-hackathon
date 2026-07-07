@@ -676,8 +676,12 @@ class SetupRunner:
         proc.stdin.write("\n")
         proc.stdin.flush()
 
-    def stop(self) -> None:
-        """Ctrl-C the running tool; its own cleanup (torque release) runs."""
+    def stop(self, wait: float = 5.0) -> None:
+        """Ctrl-C the running tool; its own cleanup (torque release) runs.
+
+        Blocks until the tool has actually exited (up to ``wait`` seconds), so a caller
+        can stop one tool and immediately start another without racing ``start()``'s
+        already-running check."""
         with self._lock:
             if not self._running:
                 return
@@ -685,6 +689,12 @@ class SetupRunner:
             proc = self._proc
         if proc is not None:
             proc.send_signal(signal.SIGINT)
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            with self._lock:
+                if not self._running:
+                    return
+            time.sleep(0.05)
 
     def close(self) -> None:
         with self._lock:

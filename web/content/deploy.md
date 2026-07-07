@@ -1,12 +1,6 @@
 ---
 title: "Deploy: close the loop"
-section: The data collection loop
 order: 6
-minutes: 10
-youllLearn:
-  - Replaying a recorded episode back on the follower arm
-  - How a trained policy runs on the same plumbing
-  - What "closing the loop" means for your next dataset
 ---
 
 The last step is getting motion *back onto* the robot. The simplest deployment is replay:

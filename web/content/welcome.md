@@ -1,18 +1,18 @@
 ---
 title: Welcome to Hackathon
-section: Before starting
 order: 1
-minutes: 5
-youllLearn:
-  - What you'll build today, end to end
-  - The hardware and software you need before starting
-  - How to install the repo and its tools
 ---
+
+<aside class="highlight">
+<h2>Today's goal</h2>
+<p>Close a full robot-learning loop — set up, collect, refine, train, deploy — entirely on
+your own laptop, and leave with a curated dataset you recorded yourself.</p>
+</aside>
 
 Today you'll close a full robot-learning loop on your own laptop:
 
 1. **Set up** — calibrate a leader/follower pair of SO-100 arms and verify teleoperation.
-2. **Collect** — teleoperate the follower and record episodes into a local Rerun dataset.
+2. **Collect** — teleoperate the follower and record episodes into a local [Rerun](https://rerun.io/) dataset.
 3. **Refine** — query what you recorded, inspect it, and curate good episodes.
 4. **Train** — export the dataset to LeRobot v3 (and optionally push it to the Hugging Face Hub).
 5. **Deploy** — replay a trajectory back on the robot and close the loop.

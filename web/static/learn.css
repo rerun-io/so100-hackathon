@@ -62,91 +62,6 @@ body {
 }
 /* Pages with the wide collect widget get extra room from the flexible max-width above. */
 
-/* ── Sidebar timeline (after landing's CourseNav) ───────────────────── */
-.course-nav {
-  position: sticky;
-  top: 3.25rem;
-  align-self: flex-start;
-  flex: 0 0 15rem;
-  max-height: calc(100vh - 3.25rem);
-  overflow-y: auto;
-  padding: 3rem 1rem 4rem 0.25rem;
-}
-.course-nav-list { list-style: none; margin: 0; padding: 0; }
-
-.nav-rail { position: relative; flex: 0 0 auto; width: 1.25rem; align-self: stretch; }
-.nav-line {
-  position: absolute;
-  left: 50%;
-  width: 2px;
-  transform: translateX(-50%);
-  background: var(--border);
-}
-.nav-line.filled { background: var(--primary); }
-/* Dot center sits at the middle of the name's first line (1.5rem line-height / 2). */
-.nav-line-top { top: 0; height: 0.75rem; }
-.nav-line-bottom { top: 0.75rem; bottom: 0; }
-
-.nav-dot {
-  position: absolute;
-  left: 50%;
-  top: 0.75rem;
-  transform: translate(-50%, -50%);
-  width: 1rem;
-  height: 1rem;
-  border-radius: 999px;
-  border: 2px solid var(--border);
-  background: var(--bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--bg);
-  z-index: 1;
-}
-
-.nav-item {
-  display: flex;
-  gap: 0.75rem;
-  min-height: 3rem;
-  color: var(--subtle);
-  text-decoration: none;
-  transition: color 120ms ease;
-}
-.nav-item:hover { color: var(--fg); }
-.nav-item:hover .nav-dot { border-color: var(--border-strong); }
-.nav-label { display: flex; flex-direction: column; gap: 0.1rem; padding: 0 0 0.9rem; min-width: 0; }
-.nav-name { font-size: 1rem; line-height: 1.5rem; }
-.nav-tagline { font-size: 0.8rem; line-height: 1.3; color: var(--muted); }
-
-.nav-item[data-state="done"] .nav-dot { background: var(--primary); border-color: var(--primary); }
-.nav-item[data-state="current"] { color: var(--fg); }
-.nav-item[data-state="current"] .nav-name { font-weight: 600; }
-.nav-item[data-state="current"] .nav-dot {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-soft);
-}
-.nav-item[data-state="current"] .nav-dot::after {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--primary);
-}
-
-.nav-section { display: flex; gap: 0.75rem; align-items: stretch; }
-.nav-rail-section { min-height: 2.25rem; }
-.nav-rail-section .nav-line { top: 0; bottom: 0; }
-.nav-section-label {
-  align-self: flex-end;
-  padding: 1rem 0 0.4rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-  line-height: 1.3;
-}
-
 /* ── Article typography ─────────────────────────────────────────────── */
 .eyebrow {
   font-size: 0.75rem;
@@ -194,14 +109,16 @@ table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.92r
 th, td { border: 1px solid var(--border); padding: 0.45rem 0.7rem; text-align: left; }
 th { background: var(--code-bg); }
 
-.youll-learn {
+/* A callout card: small uppercase header + text, authored as raw HTML in the markdown
+   (<aside class="highlight"><h2>...</h2><p>...</p></aside>). */
+.highlight {
   margin: 1.5rem 0 2rem;
   padding: 1rem 1.25rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--code-bg);
 }
-.youll-learn h2 {
+.highlight h2 {
   margin: 0 0 0.4rem;
   font-size: 0.75rem;
   font-weight: 600;
@@ -209,7 +126,7 @@ th { background: var(--code-bg); }
   text-transform: uppercase;
   color: var(--muted);
 }
-.youll-learn ul { margin: 0; padding-left: 1.2rem; }
+.highlight p { margin: 0; }
 
 /* ── Prev/next footer ───────────────────────────────────────────────── */
 .pager {
@@ -291,9 +208,11 @@ th { background: var(--code-bg); }
 }
 .overlay-cmd { display: flex; align-items: center; gap: 0.5rem; }
 .copy-btn {
-  font: inherit;
+  font-family: var(--mono);
   font-size: 0.72rem;
   font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   padding: 0.15rem 0.6rem;
   border-radius: 999px;
   border: 1px solid #2c353b;
@@ -312,9 +231,9 @@ th { background: var(--code-bg); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ── Setup step widgets (Set up page) ───────────────────────────────── */
-/* One bordered card uniting the header text and the viewer, like rerun.io/learn's
-   course-recording-head. */
+/* ── Setup accordion (Set up page): 3-step panel + ONE shared viewer ── */
+/* Only one setup tool runs at a time server-side, so one viewer is the honest
+   representation. Left: single-open accordion, one section per step. */
 .setup {
   margin: 1.8rem 0 2.4rem;
   border: 1px solid var(--border);
@@ -323,31 +242,64 @@ th { background: var(--code-bg); }
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(15, 23, 30, 0.04);
 }
-.setup-head {
+.setup-body { display: flex; align-items: stretch; }
+.setup-panel {
+  flex: 0 0 20rem;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+@media (max-width: 860px) {
+  .setup-body { flex-direction: column; }
+  .setup-panel { flex: none; border-right: none; border-bottom: 1px solid var(--border); }
+}
+
+.setup-step { border-bottom: 1px solid var(--border); }
+.setup-step:last-child { border-bottom: none; }
+
+.setup-step-bar { display: flex; align-items: center; gap: 0.5rem; padding-right: 0.9rem; }
+.setup-step-bar:hover { background: var(--code-bg); }
+.setup-step-head {
+  flex: 1;
+  min-width: 0;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1.1rem 1.3rem 0.95rem;
-}
-.setup-title { font-weight: 650; font-size: 1.15rem; letter-spacing: -0.01em; }
-.setup-sub { color: var(--muted); font-size: 0.88rem; line-height: 1.45; }
-.setup-actions { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; padding-top: 0.2rem; }
-.setup-actions button {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  font-weight: 400;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  padding: 0.45rem 0.9rem;
-  border-radius: 2px;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 0 0.85rem 0.9rem;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg);
   cursor: pointer;
-  white-space: nowrap;
 }
-.setup-next { background: var(--action); border: 1px solid var(--action); color: #fff; }
-.setup-next:hover { background: var(--action-hover); border-color: var(--action-hover); }
-.setup-stop { background: var(--bg); border: 1px solid var(--border-strong); color: var(--subtle); }
-.setup-stop:hover { border-color: #c02626; color: #c02626; }
+.setup-step-title { font-weight: 650; font-size: 0.95rem; letter-spacing: -0.01em; }
+.setup-step-head .setup-badge { font-size: 0.62rem; padding: 0.15rem 0.5rem; }
+.setup-chevron { flex-shrink: 0; color: var(--muted); transition: transform 160ms ease; }
+.setup-step.open .setup-chevron { transform: rotate(90deg); }
+
+/* Blinking dot = this tool is live. Blue: red stays reserved for recording (Collect). */
+.setup-live {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: rec-blink 1s step-start infinite;
+}
+
+.setup-step-body { display: flex; flex-direction: column; gap: 0.7rem; padding: 0.1rem 0.9rem 1rem; }
+.setup-step-desc { margin: 0; font-size: 0.85rem; line-height: 1.5; color: var(--subtle); }
+.setup-step-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.overlay-title {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.overlay-sub { font-size: 0.85rem; color: #8a949a; }
+
 .setup-badge {
   padding: 0.3rem 0.7rem;
   border-radius: 999px;
@@ -360,12 +312,18 @@ th { background: var(--code-bg); }
   color: #1d7a36;
   white-space: nowrap;
 }
-.setup-error { margin: 0; padding: 0 1.3rem 0.8rem; color: #c02626; font-size: 0.85rem; }
+.setup-error { margin: 0; color: #c02626; font-size: 0.82rem; }
 .setup .viewer-box {
+  flex: 1;
+  min-width: 0;
   margin: 0;
+  height: 560px;
   border: none;
-  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
   border-radius: 0;
+}
+@media (max-width: 860px) {
+  .setup .viewer-box { border-left: none; }
 }
 .setup-action {
   font-family: var(--mono);

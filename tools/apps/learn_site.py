@@ -14,9 +14,9 @@ the local ``pixi run so100-server`` (gRPC proxy :9876, control API :8000). When 
 server is down the widgets show a hint and keep retrying -- the site never owns
 hardware or data itself.
 
-Layout v2 prototype: every page is also served under ``/v2/<slug>/`` with an alternative
-layout (horizontal stepper on top, wide content, vertical collect fields next to a big
-viewer) -- same markdown, same widgets, just ``web/static/learn2.css`` on top.
+Layout: horizontal stepper on top (condensing on scroll, ``web/static/learn2.js``), wide
+content, ``web/static/learn2.css`` layered over ``learn.css``. Old ``/v2/...`` URLs
+redirect to the same page at the plain path.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTENT_DIR = REPO_ROOT / "web" / "content"
 STATIC_DIR = REPO_ROOT / "web" / "static"
 
-COURSE_TITLE = "SO-100 Hackathon"
+COURSE_TITLE = "Embodied Metal Hackathon"
 
 MIME_TYPES = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png"}
 
@@ -53,24 +53,13 @@ class Page:
 
     slug: str
     title: str
-    section: str
     order: int
-    minutes: int
-    youll_learn: tuple[str, ...]
     body_md: str
 
     @property
     def verb(self) -> str:
-        """``"Collect: record episodes"`` -> ``"Collect"`` (nav name)."""
+        """``"Collect: record episodes"`` -> ``"Collect"`` (stepper name)."""
         return self.title.split(": ", 1)[0]
-
-    @property
-    def tagline(self) -> str:
-        """``"Collect: record episodes"`` -> ``"Record episodes"`` (nav subline)."""
-        if ": " not in self.title:
-            return ""
-        rest = self.title.split(": ", 1)[1]
-        return rest[:1].upper() + rest[1:]
 
 
 def _parse_front_matter(text: str) -> tuple[dict[str, str | list[str]], str]:
@@ -104,16 +93,11 @@ def load_pages(content_dir: Path = CONTENT_DIR) -> list[Page]:
     pages: list[Page] = []
     for path in sorted(content_dir.glob("*.md")):
         meta, body = _parse_front_matter(path.read_text(encoding="utf-8"))
-        youll_learn = meta.get("youllLearn", [])
-        assert isinstance(youll_learn, list)
         pages.append(
             Page(
                 slug=path.stem,
                 title=str(meta.get("title", path.stem)),
-                section=str(meta.get("section", "")),
                 order=int(str(meta.get("order", 0))),
-                minutes=int(str(meta.get("minutes", 5))),
-                youll_learn=tuple(youll_learn),
                 body_md=body,
             )
         )
@@ -124,55 +108,35 @@ def load_pages(content_dir: Path = CONTENT_DIR) -> list[Page]:
 # --- rendering ------------------------------------------------------------------
 
 
-def render_nav(pages: list[Page], current_order: int) -> str:
-    """The timeline sidebar: section labels + one dot per article, done/current/upcoming."""
-    parts = ['<ol class="course-nav-list">']
-    for i, page in enumerate(pages):
-        first, last = i == 0, i == len(pages) - 1
-        if page.section != (pages[i - 1].section if i else None):
-            line = "" if first else f'<span class="nav-line{" filled" if page.order <= current_order else ""}"></span>'
-            parts.append(
-                f'<li class="nav-section" aria-hidden="true"><span class="nav-rail nav-rail-section">{line}</span>'
-                f'<span class="nav-section-label">{html.escape(page.section)}</span></li>'
-            )
-        state = "done" if page.order < current_order else ("current" if page.order == current_order else "upcoming")
-        top = "" if first else f'<span class="nav-line nav-line-top{" filled" if page.order <= current_order else ""}"></span>'
-        bottom = "" if last else f'<span class="nav-line nav-line-bottom{" filled" if page.order < current_order else ""}"></span>'
-        dot = f'<span class="nav-dot">{CHECK_SVG if state == "done" else ""}</span>'
-        tagline = f'<span class="nav-tagline">{html.escape(page.tagline)}</span>' if page.tagline else ""
-        aria = ' aria-current="page"' if state == "current" else ""
-        parts.append(
-            f'<li><a class="nav-item" data-state="{state}" href="/{page.slug}/"{aria}>'
-            f'<span class="nav-rail">{top}{dot}{bottom}</span>'
-            f'<span class="nav-label"><span class="nav-name">{html.escape(page.verb)}</span>{tagline}</span></a></li>'
-        )
-    parts.append("</ol>")
-    return "".join(parts)
-
-
 def render_stepper(pages: list[Page], current_order: int) -> str:
-    """The v2 horizontal stepper: one dot per article across the top, done/current/upcoming."""
+    """The horizontal stepper: one dot per step across the top, done/current/upcoming.
+
+    The first page (the welcome homepage, reached via the site title) is not a step.
+    """
     parts = ['<ol class="stepper">']
-    for i, page in enumerate(pages):
+    for i, page in enumerate(pages[1:]):
         state = "done" if page.order < current_order else ("current" if page.order == current_order else "upcoming")
         line = "" if i == 0 else f'<span class="step-line{" filled" if page.order <= current_order else ""}" aria-hidden="true"></span>'
-        tagline = f'<span class="step-tagline">{html.escape(page.tagline)}</span>' if page.tagline else ""
         aria = ' aria-current="page"' if state == "current" else ""
         parts.append(
-            f'<li>{line}<a class="step" data-state="{state}" href="/v2/{page.slug}/"{aria}>'
+            f'<li>{line}<a class="step" data-state="{state}" href="/{page.slug}/"{aria}>'
             f'<span class="step-dot">{CHECK_SVG if state == "done" else ""}</span>'
-            f'<span class="step-label"><span class="step-name">{html.escape(page.verb)}</span>{tagline}</span></a></li>'
+            f'<span class="step-name">{html.escape(page.verb)}</span></a></li>'
         )
     parts.append("</ol>")
     return "".join(parts)
 
 
-def _shell(*, title: str, nav_html: str, article_html: str, v2: bool = False) -> str:
-    v2_css = '\n<link rel="stylesheet" href="/static/learn2.css">' if v2 else ""
-    nav = (
-        f'<nav class="stepper-nav" aria-label="Course steps">{nav_html}</nav>\n<div class="layout">'
-        if v2
-        else f'<div class="layout">\n<nav class="course-nav" aria-label="Course articles">{nav_html}</nav>'
+def _shell(*, title: str, nav_html: str, article_html: str) -> str:
+    header = (
+        f'<header class="site-header"><a class="site-title" href="/">{html.escape(COURSE_TITLE)}</a>\n'
+        '<span class="site-sub">the data collection loop</span></header>'
+    )
+    # Header + stepper share one sticky wrapper so the condensed state (learn2.js)
+    # can slide the header away and dock the stepper with a single transform.
+    chrome = (
+        f'<div class="chrome">\n{header}\n'
+        f'<nav class="stepper-nav" aria-label="Course steps">{nav_html}</nav>\n</div>\n<div class="layout">'
     )
     return f"""<!doctype html>
 <html lang="en">
@@ -183,50 +147,41 @@ def _shell(*, title: str, nav_html: str, article_html: str, v2: bool = False) ->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap">
-<link rel="stylesheet" href="/static/learn.css">{v2_css}
+<link rel="stylesheet" href="/static/learn.css">
+<link rel="stylesheet" href="/static/learn2.css">
 </head>
-<body{' class="v2"' if v2 else ""}>
-<header class="site-header"><a class="site-title" href="{"/v2/" if v2 else "/"}">{html.escape(COURSE_TITLE)}</a>
-<span class="site-sub">the data collection loop</span></header>
-{nav}
+<body class="v2">
+{chrome}
 <article class="content">{article_html}</article>
 </div>
 <script type="module" src="/static/app.js"></script>
+<script type="module" src="/static/learn2.js"></script>
 </body>
 </html>"""
 
 
-def render_page(pages: list[Page], page: Page, *, v2: bool = False) -> str:
+def render_page(pages: list[Page], page: Page) -> str:
     index = pages.index(page)
     prev_page = pages[index - 1] if index > 0 else None
     next_page = pages[index + 1] if index + 1 < len(pages) else None
-    prefix = "/v2" if v2 else ""
-
-    learn_html = ""
-    if page.youll_learn:
-        items = "".join(f"<li>{html.escape(item)}</li>" for item in page.youll_learn)
-        learn_html = f'<aside class="youll-learn"><h2>You\'ll learn</h2><ul>{items}</ul></aside>'
 
     prev_html = (
-        f'<a class="pager-link" href="{prefix}/{prev_page.slug}/"><span class="pager-dir">&larr; Previous</span><span>{html.escape(prev_page.title)}</span></a>'
+        f'<a class="pager-link" href="/{prev_page.slug}/"><span class="pager-dir">&larr; Previous</span><span>{html.escape(prev_page.title)}</span></a>'
         if prev_page
         else '<span class="pager-link"></span>'
     )
     next_html = (
-        f'<a class="pager-link pager-next" href="{prefix}/{next_page.slug}/"><span class="pager-dir">Next &rarr;</span><span>{html.escape(next_page.title)}</span></a>'
+        f'<a class="pager-link pager-next" href="/{next_page.slug}/"><span class="pager-dir">Next &rarr;</span><span>{html.escape(next_page.title)}</span></a>'
         if next_page
         else '<span class="pager-link pager-done">That&rsquo;s the whole loop &mdash; go collect great data!</span>'
     )
 
     body_html = markdown.markdown(page.body_md, extensions=["fenced_code", "tables"])
     article = f"""
-<p class="eyebrow">{html.escape(page.section)} &middot; {page.minutes} min</p>
 <h1>{html.escape(page.title)}</h1>
-{learn_html}
 {body_html}
 <footer class="pager">{prev_html}{next_html}</footer>"""
-    nav_html = render_stepper(pages, page.order) if v2 else render_nav(pages, page.order)
-    return _shell(title=f"{page.title} - {COURSE_TITLE}", nav_html=nav_html, article_html=article, v2=v2)
+    return _shell(title=f"{page.title} - {COURSE_TITLE}", nav_html=render_stepper(pages, page.order), article_html=article)
 
 
 # --- serving / building ---------------------------------------------------------
@@ -257,20 +212,23 @@ def make_handler(viewer_assets: dict[str, Path]) -> type[BaseHTTPRequestHandler]
                 else:
                     self._send(404, "text/plain", b"not found")
                 return
+            # This layout used to live under /v2/ while the old one held the plain URLs:
+            # send stale tabs/bookmarks to the same page at its real path.
+            if path == "/v2" or path.startswith("/v2/"):
+                self.send_response(301)
+                self.send_header("Location", path.removeprefix("/v2") or "/")
+                self.end_headers()
+                return
             pages = load_pages()  # re-read every request: live-edit the markdown
-            # /v2/... mirrors the whole course in the layout-v2 prototype (top stepper, wide content).
-            v2 = path == "/v2" or path.startswith("/v2/")
-            if v2:
-                path = path.removeprefix("/v2") or "/"
             if path == "/":  # no cover page: land straight on the first article
-                self._send(200, "text/html; charset=utf-8", render_page(pages, pages[0], v2=v2).encode())
+                self._send(200, "text/html; charset=utf-8", render_page(pages, pages[0]).encode())
                 return
             slug = path.strip("/")
             page = next((p for p in pages if p.slug == slug), None)
             if page is None:
                 self._send(404, "text/plain", b"not found")
             else:
-                self._send(200, "text/html; charset=utf-8", render_page(pages, page, v2=v2).encode())
+                self._send(200, "text/html; charset=utf-8", render_page(pages, page).encode())
 
     return Handler
 

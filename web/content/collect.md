@@ -1,25 +1,12 @@
 ---
-title: "Collect: record episodes to a dataset"
-section: The data collection loop
+title: "Collect"
 order: 3
-minutes: 20
-youllLearn:
-  - Live-operating the arms vs. recording episodes — two modes, two tabs
-  - How episode ids, task, and tag become queryable metadata
-  - Reviewing episodes and saving property edits to the catalog
 ---
 
 Make sure `pixi run so100-server` is still running, then work straight from this page.
-The card below has two tabs:
 
-- **Livestream** — just operate the robot and watch what it sees, in real time. Once you
-  turn the feed on it stays on: one continuous stream for the whole session, kept only in
-  memory (the **local** source) and flushed oldest-first when memory runs low — nothing
-  is stored and nothing piles up. Recording never interrupts it. You can **pause** the
-  stream any time (teleop keeps working, incoming frames are simply dropped) and resume
-  later — it's still the *same* stream, just with a gap on the timeline.
-- **Recording** — operate the dataset recorder. The side panel shows one episode at a
-  time: its id, its properties, and whether it has been recorded yet.
+- **Livestream** — operate the robot in real time. It is one continuous stream for the whole session, kept only in memory and flushed oldest-first when memory runs low. Nothing is stored and nothing piles up. 
+- **Recording** — once you're ready to collect hit that record button. It will be stored in the local server from where you could query it later when curating dataset for training.
 
 <div data-collect></div>
 
