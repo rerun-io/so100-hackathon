@@ -82,20 +82,23 @@ function wireCopy(button, text) {
 
 // ---- embedded viewer ---------------------------------------------------------------
 
-// The viewer grabs keyboard focus for its <canvas> two ways, and both scroll the
-// canvas into view -- yanking the page on boot and when leaving fullscreen:
-//   1. plain .focus() calls -> patched on the prototype (once, at load; a per-canvas
-//      patch after insertion loses the race on first boot) to pass preventScroll.
-//   2. it sets canvas.autofocus = true -> the browser then focuses the canvas
-//      internally on insertion, bypassing .focus() entirely. No preventScroll hook
-//      exists for that path, so the attribute is neutered outright.
-// Keyboard input still works: clicking the viewer focuses it (without scrolling, per 1).
+// The viewer (eframe/egui under the hood) grabs keyboard focus in ways that scroll the
+// page. Worst offender: its "text agent" -- a hidden 1px <input> parked at (0,0) OF THE
+// BODY to capture IME/keyboard input. eframe marks it autofocus=true and calls .focus()
+// on it whenever the canvas is interacted with; focusing an element at the top of the
+// page scrolls the window to the top (the "jump" on viewer boot). The canvas itself gets
+// the same treatment on boot and when leaving fullscreen. Nothing in the site's own code
+// calls DOM .focus() or uses autofocus, so patch globally, once, at load:
+//   1. every programmatic .focus() gets preventScroll (Tab-key navigation is browser-
+//      internal and does NOT go through this method, so keyboard a11y keeps scrolling);
+//   2. autofocus is neutered outright -- the browser honors it on insertion via an
+//      internal path that .focus() patching can't reach, and preventScroll can't either.
 {
-  const original = HTMLCanvasElement.prototype.focus;
-  HTMLCanvasElement.prototype.focus = function (opts) {
+  const original = HTMLElement.prototype.focus;
+  HTMLElement.prototype.focus = function (opts) {
     original.call(this, { ...opts, preventScroll: true });
   };
-  Object.defineProperty(HTMLCanvasElement.prototype, "autofocus", {
+  Object.defineProperty(HTMLElement.prototype, "autofocus", {
     get() {
       return false;
     },

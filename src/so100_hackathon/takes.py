@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import rerun as rr
+import rerun.blueprint as rrb
 
 APP_ID = "so-100"
 
@@ -167,6 +168,47 @@ def scan_edits(recordings_dir: Path) -> dict[str, list[Path]]:
             if files:
                 edits[child.name] = files
     return edits
+
+
+def save_dataset_blueprint(recordings_dir: Path, dataset: str, blueprint: rrb.Blueprint) -> Path:
+    """Write the dataset's blueprint to ``recordings/<dataset>/blueprint/blueprint.rrd``.
+
+    One blueprint per dataset, written ONCE: an existing file is left untouched. The
+    catalog reads it lazily from disk (rewriting it breaks the live registration with
+    'malformed response'), and it may carry user customizations -- delete the file to
+    have the next recording regenerate it. Kept in its own subdir so neither the
+    episode scan nor the edits scan picks it up."""
+    path = recordings_dir / sanitize_name(dataset) / "blueprint" / "blueprint.rrd"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        blueprint.save(APP_ID, str(path))
+    return path
+
+
+def register_blueprint(catalog_uri: str, dataset_name: str, path: Path) -> bool:
+    """Set the dataset's default blueprint, unless it already has one.
+
+    Without a default blueprint, episodes opened from the catalog get the viewer's
+    heuristic layout. The blueprint is the same for every recording of the dataset, so
+    it is registered at most once per catalog lifetime (the in-process catalog forgets
+    it on shutdown; the startup scan re-registers from disk)."""
+    client = rr.catalog.CatalogClient(catalog_uri)
+    dataset = client.create_dataset(sanitize_name(dataset_name), exist_ok=True)
+    if dataset.default_blueprint() is not None:
+        return False
+    dataset.register_blueprint(path.resolve().as_uri(), set_default=True)
+    return True
+
+
+def scan_blueprints(recordings_dir: Path) -> dict[str, Path]:
+    """Map each dataset to its saved default blueprint (re-registered on startup)."""
+    blueprints: dict[str, Path] = {}
+    if recordings_dir.is_dir():
+        for child in sorted(recordings_dir.iterdir()):
+            path = child / "blueprint" / "blueprint.rrd"
+            if child.is_dir() and path.exists():
+                blueprints[child.name] = path
+    return blueprints
 
 
 def optimize_rrd(path: Path) -> None:

@@ -93,9 +93,12 @@ from so100_hackathon.takes import (
     finish_take,
     next_episode,
     optimize_rrd,
+    register_blueprint,
     register_edits,
     register_rrd,
     sanitize_name,
+    save_dataset_blueprint,
+    scan_blueprints,
     scan_edits,
     scan_recordings,
     stamp_properties,
@@ -376,8 +379,9 @@ class Recorder:
             task = str((self._last_take or {}).get("task", ""))
             # Back to the live stream alone -- it never paused, so the viewer just
             # keeps playing while the file is finalized below.
-            if self._source is not None and self._live is not None:
-                self._source.set_output(self._live)
+            source = self._source
+            if source is not None and self._live is not None:
+                source.set_output(self._live)
 
         assert take is not None and path is not None  # set by start() before _recording flips true
         # proxy_uri=None: stamp the final properties, flush, and close the file.
@@ -391,6 +395,13 @@ class Recorder:
             summary["registration"] = registration
             summary["status"] = "registered"
             print(f"[catalog]   registered {path} in dataset '{path.parent.name}' (segments: {registration['segment_ids']})", flush=True)
+            # Give the dataset the same blueprint as the live stream, so episodes opened
+            # from the catalog don't fall back to the viewer's heuristic layout. One
+            # blueprint per dataset: no-op once it exists (users may customize it).
+            if isinstance(source, ArmSession):
+                blueprint_file = save_dataset_blueprint(self._recordings_dir, path.parent.name, source.blueprint())
+                if register_blueprint(self._catalog_uri, path.parent.name, blueprint_file):
+                    print(f"[catalog]   default blueprint set for dataset '{path.parent.name}'", flush=True)
         except Exception as err:  # noqa: BLE001 - surface any failure to the UI
             summary["status"] = "register_failed"
             summary["error"] = f"{type(err).__name__}: {err}"
@@ -858,6 +869,11 @@ def main(config: Config) -> None:
     for name, edit_files in scan_edits(config.recordings_dir).items():
         register_edits(catalog_uri, name, edit_files)
         print(f"[scan]      dataset '{name}': {len(edit_files)} metadata edit(s) re-applied", flush=True)
+    # Re-apply saved default blueprints -- without one, the viewer opens catalog
+    # episodes with its heuristic layout.
+    for name, blueprint_file in scan_blueprints(config.recordings_dir).items():
+        register_blueprint(catalog_uri, name, blueprint_file)
+        print(f"[scan]      dataset '{name}': default blueprint re-applied", flush=True)
 
     recorder = Recorder(catalog_uri, config.recordings_dir, arm_fps=config.fps)
     setup = SetupRunner(calibration_dir=REPO_ROOT / "calibrations")

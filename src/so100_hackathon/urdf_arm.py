@@ -73,6 +73,8 @@ class UrdfArm:
     """Display sign per joint (see JOINT_DISPLAY_SIGNS)."""
     collision_geometries_path: str
     """Entity path of this model's collision meshes (for hiding in blueprints)."""
+    visual_geometries_path: str
+    """Entity path of this model's visual meshes (all a 3D blueprint view needs to include)."""
     tree: rr.urdf.UrdfTree
     """Parsed URDF, retained so the static geometry can be (re-)logged per recording."""
     urdf_path: Path
@@ -104,6 +106,7 @@ class UrdfArm:
             center_angles_rad=center_angles_rad,
             joint_signs=JOINT_DISPLAY_SIGNS[urdf_path.name],
             collision_geometries_path=f"{name}/{tree.name}/collision_geometries",
+            visual_geometries_path=f"{name}/{tree.name}/visual_geometries",
             tree=tree,
             urdf_path=urdf_path,
             color=color,

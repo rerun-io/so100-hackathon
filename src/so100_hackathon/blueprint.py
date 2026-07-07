@@ -1,64 +1,87 @@
-"""Rerun blueprint: 3D arms + camera feeds on the left, per-arm telemetry columns on the right."""
+"""Rerun blueprint: 3D arms + camera feeds on top; below, one position tab per arm
+(the training-relevant series) plus a diagnostics grid with the servo health metrics."""
 
 from __future__ import annotations
 
 import rerun.blueprint as rrb
 
-
-def _telemetry_column(name: str, time_ranges: rrb.VisibleTimeRange) -> rrb.Vertical:
-    return rrb.Vertical(
-        # <name>/goal only exists in teleop (the commanded follower pose); overlaying it on
-        # the measured position makes tracking lag/error directly visible.
-        rrb.TimeSeriesView(
-            name=f"{name} position",
-            origin=name,
-            contents=["+ $origin/position", "+ $origin/goal"],
-            time_ranges=time_ranges,
-        ),
-        rrb.Horizontal(
-            rrb.TimeSeriesView(name=f"{name} current (mA)", origin=f"{name}/current", time_ranges=time_ranges),
-            rrb.TimeSeriesView(name=f"{name} temperature (C)", origin=f"{name}/temperature", time_ranges=time_ranges),
-        ),
-        row_shares=[2, 1],
-    )
+# entity subpath -> plot title, for the diagnostics tab. Everything here is logged but
+# irrelevant to lerobot training (which only consumes positions + images) — it's rig health.
+DIAGNOSTICS: dict[str, str] = {
+    "current": "current (mA)",
+    "temperature": "temperature (C)",
+    "voltage": "voltage (V)",
+    "load": "load (%)",
+    "speed": "speed (ticks/s)",
+}
 
 
 def create_blueprint(
     arm_names: list[str],
     *,
+    leader_name: str | None = None,
     camera_paths: list[str] | None = None,
-    collision_paths: list[str] | None = None,
+    visual_paths: list[str] | None = None,
     show_urdf: bool = False,
     window_seconds: float = 10.0,
 ) -> rrb.Blueprint:
     """Sliding-window layout for realtime viewing.
 
-    Telemetry-only when ``show_urdf`` is off and there are no cameras; otherwise a
-    spatial column (3D arms over camera feeds) next to the telemetry columns.
+    Tabs-only when ``show_urdf`` is off and there are no cameras; otherwise the 3D arms
+    and camera feeds sit side by side above the tabs.
     """
     time_ranges = rrb.VisibleTimeRange(
         "time",
         start=rrb.TimeRangeBoundary.cursor_relative(seconds=-window_seconds),
         end=rrb.TimeRangeBoundary.cursor_relative(),
     )
-    telemetry = rrb.Horizontal(*[_telemetry_column(name, time_ranges) for name in arm_names])
 
-    spatial_views: list[rrb.Spatial3DView | rrb.Horizontal] = []
+    def label(name: str) -> str:
+        if leader_name is None or name in ("leader", "follower"):
+            return name  # arms named by role need no suffix
+        return f"{name} (leader)" if name == leader_name else f"{name} (follower)"
+
+    # <name>/goal only exists in teleop on the follower (the commanded pose derived from
+    # the leader) — it is lerobot's "action", while the follower's measured position is
+    # "observation.state". Overlaying them makes tracking lag/error directly visible.
+    position_tabs = [
+        rrb.TimeSeriesView(
+            name=f"{label(name)} position",
+            origin=name,
+            contents=["+ $origin/position", "+ $origin/goal"],
+            time_ranges=time_ranges,
+        )
+        for name in arm_names
+    ]
+    # One row of health plots per arm; none of this feeds training, hence its own tab.
+    diagnostics = rrb.Grid(
+        *[
+            rrb.TimeSeriesView(name=f"{label(name)} {title}", origin=f"{name}/{subpath}", time_ranges=time_ranges)
+            for name in arm_names
+            for subpath, title in DIAGNOSTICS.items()
+        ],
+        grid_columns=len(DIAGNOSTICS),
+        name="diagnostics",
+    )
+    # Open on the follower: its position (observation.state) + goal (action) are what training consumes.
+    active = next((i for i, name in enumerate(arm_names) if name != leader_name), 0)
+    tabs = rrb.Tabs(*position_tabs, diagnostics, active_tab=active)
+
+    top: list[rrb.Spatial3DView | rrb.Spatial2DView] = []
     if show_urdf:
-        spatial_views.append(
+        top.append(
             rrb.Spatial3DView(
                 name="arms",
                 origin="/",
-                # Camera images have no pinhole, so they don't belong in the 3D view.
-                contents=["+ $origin/**", "- /camera/**"],
-                # Scalar entities are skipped by the 3D view; just hide the URDF collision meshes.
-                overrides={path: rrb.EntityBehavior(visible=False) for path in (collision_paths or [])},
+                # Include ONLY the URDF visual meshes: no cameras, collision meshes, or
+                # transform/scalar entities cluttering the view's entity tree. Ancestor
+                # transforms still apply — contents filters visibility, not the hierarchy.
+                contents=[f"+ /{path}/**" for path in visual_paths or []],
             )
         )
-    if camera_paths:
-        spatial_views.append(rrb.Horizontal(*[rrb.Spatial2DView(name=path.rsplit("/", 1)[-1], origin=path) for path in camera_paths]))
+    top.extend(rrb.Spatial2DView(name=path.rsplit("/", 1)[-1], origin=path) for path in camera_paths or [])
 
-    if not spatial_views:
-        return rrb.Blueprint(telemetry, collapse_panels=True)
-    spatial = rrb.Vertical(*spatial_views, row_shares=[2, 1]) if len(spatial_views) == 2 else spatial_views[0]
-    return rrb.Blueprint(rrb.Horizontal(spatial, telemetry, column_shares=[3, 2]), collapse_panels=True)
+    if not top:
+        return rrb.Blueprint(tabs, collapse_panels=True)
+    spatial = rrb.Horizontal(*top) if len(top) > 1 else top[0]
+    return rrb.Blueprint(rrb.Vertical(spatial, tabs, row_shares=[2, 1]), collapse_panels=True)

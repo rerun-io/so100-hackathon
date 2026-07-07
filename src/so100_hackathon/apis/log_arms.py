@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import rerun as rr
+import rerun.blueprint as rrb
 
 from so100_hackathon.blueprint import create_blueprint
 from so100_hackathon.calibration import MotorCalibration, fallback_calibration, load_arm_kind, load_arm_ranges, load_calibration
@@ -161,8 +162,16 @@ def _open_arms(config: LogArmsConfig, rec: rr.RecordingStream) -> list[Arm]:
                 flush=True,
             )
     resolved.sort(key=lambda arm: not arm.is_leader)  # leader first -> leftmost
+    # Entity names default to the USB serial id, but once roles are known plain
+    # "leader"/"follower" reads much better in the viewer. Keep explicit --names, and
+    # keep the serials when roles are unknown or would collide (e.g. two followers).
+    if not config.names:
+        roles = ["leader" if arm.is_leader else "follower" for arm in resolved]
+        if all(arm.is_leader is not None for arm in resolved) and len(set(roles)) == len(roles):
+            for arm, role in zip(resolved, roles, strict=True):
+                arm.name = role
     for arm in resolved:
-        print(f"{arm.name}: {'LEADER' if arm.is_leader else 'follower'}", flush=True)
+        print(f"{arm.name}: {'LEADER' if arm.is_leader else 'follower'} on {arm.port}", flush=True)
 
     arms: list[Arm] = []
     for i, res in enumerate(resolved):
@@ -323,15 +332,17 @@ class ArmSession:
         if self._follower is not None:
             goal_names = [f"{calib.motor_name} goal" for calib in self._follower.calibration]
             rec.log(f"{self._follower.name}/goal", rr.SeriesLines(names=goal_names), static=True)
-        rec.send_blueprint(
-            create_blueprint(
-                [arm.name for arm in self.arms],
-                camera_paths=[streamer.entity_path for streamer in self.streamers],
-                collision_paths=[arm.urdf.collision_geometries_path for arm in self.arms if arm.urdf is not None],
-                show_urdf=self.config.urdf,
-                window_seconds=self.config.window_seconds,
-            ),
-            make_active=True,
+        rec.send_blueprint(self.blueprint(), make_active=True)
+
+    def blueprint(self) -> rrb.Blueprint:
+        """This session's viewer layout (also saved as the catalog datasets' default blueprint)."""
+        return create_blueprint(
+            [arm.name for arm in self.arms],
+            leader_name=next((arm.name for arm in self.arms if arm.is_leader), None),
+            camera_paths=[streamer.entity_path for streamer in self.streamers],
+            visual_paths=[arm.urdf.visual_geometries_path for arm in self.arms if arm.urdf is not None],
+            show_urdf=self.config.urdf,
+            window_seconds=self.config.window_seconds,
         )
 
     def _run(self) -> None:
@@ -433,8 +444,9 @@ def main(config: LogArmsConfig) -> None:
     rec.send_blueprint(
         create_blueprint(
             [arm.name for arm in arms],
+            leader_name=next((arm.name for arm in arms if arm.is_leader), None),
             camera_paths=[streamer.entity_path for streamer in streamers],
-            collision_paths=[arm.urdf.collision_geometries_path for arm in arms if arm.urdf is not None],
+            visual_paths=[arm.urdf.visual_geometries_path for arm in arms if arm.urdf is not None],
             show_urdf=config.urdf,
             window_seconds=config.window_seconds,
         ),

@@ -30,7 +30,18 @@ import tyro
 from so100_hackathon.apis.log_arms import ArmSession, LogArmsConfig
 from so100_hackathon.cameras import CameraSource
 from so100_hackathon.rerun_config import LiveViewerConfig
-from so100_hackathon.takes import SEGMENT_TAGS, begin_take, episode_path, finish_take, next_episode, optimize_rrd, register_rrd, sanitize_name
+from so100_hackathon.takes import (
+    SEGMENT_TAGS,
+    begin_take,
+    episode_path,
+    finish_take,
+    next_episode,
+    optimize_rrd,
+    register_blueprint,
+    register_rrd,
+    sanitize_name,
+    save_dataset_blueprint,
+)
 
 os.environ.setdefault("RERUN_INSECURE_SKIP_HOST_CHECK", "1")
 os.environ.setdefault("RERUN_FLUSH_TICK_SECS", "0.008")
@@ -116,9 +127,16 @@ def main(config: Config) -> None:
         source.close()
 
     optimize_rrd(path)
+    # Save the dataset's default blueprint next to the episodes: registered below if the
+    # catalog is up, re-registered by every so100-server start either way -- without it,
+    # episodes opened from the catalog get the viewer's heuristic layout.
+    blueprint_file = save_dataset_blueprint(config.recordings_dir, config.dataset, source.blueprint()) if isinstance(source, ArmSession) else None
     if _port_open(config.catalog_port):
-        registration = register_rrd(f"rerun+http://localhost:{config.catalog_port}", sanitize_name(config.dataset), path)
+        catalog_uri = f"rerun+http://localhost:{config.catalog_port}"
+        registration = register_rrd(catalog_uri, sanitize_name(config.dataset), path)
         print(f"registered: dataset '{registration['dataset']}', segments {registration['segment_ids']}", flush=True)
+        if blueprint_file is not None and register_blueprint(catalog_uri, sanitize_name(config.dataset), blueprint_file):
+            print("blueprint:  registered as the dataset's default", flush=True)
     else:
         print(f"saved:      {path} (no catalog server on port {config.catalog_port}; the next `pixi run so100-server` start registers it)")
 
