@@ -73,6 +73,8 @@ description = "Debug: stream RealSense color + depth into a Rerun viewer (standa
 cmd = "python tools/apps/realsense_sudo_setup.py"
 description = "One-time macOS setup: passwordless sudo for the realsense capture (prompts for your password once)"
 
+# The throwaway RecordingStream is required: without an enabled recording,
+# rr.spawn is a no-op ("Rerun is disabled").
 [tool.pixi.feature.realsense.tasks._realsense-viewer]
 cmd = "python -c 'import rerun as rr; rr.spawn(connect=False, recording=rr.RecordingStream(\"so100\"))'"
 description = "internal: ensure a Rerun viewer is running as the login user"

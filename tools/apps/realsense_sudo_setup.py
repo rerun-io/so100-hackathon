@@ -4,7 +4,8 @@ macOS 12+ only lets root capture a kernel-claimed USB device (Apple's UVC driver
 holds the RealSense), so `realsense-debug-sudo` runs the capture under sudo. This
 installs a machine-local sudoers rule so that sudo never prompts::
 
-    pixi run -e realsense realsense-sudo-setup   # asks for your password once
+    pixi run -e realsense realsense-sudo-setup             # asks for your password once
+    pixi run -e realsense realsense-sudo-setup -- --remove # uninstall the rule
 
 The rule whitelists exactly one binary: this repo's ``.pixi/envs/realsense/bin/python``.
 Note that binary is user-writable, so this is effectively "run python as root without
@@ -13,16 +14,28 @@ a password" for this user -- fine for a personal dev machine, not for shared one
 
 from __future__ import annotations
 
+import dataclasses
 import getpass
 import pathlib
 import subprocess
-import sys
 import tempfile
+
+import tyro
 
 SUDOERS_PATH = "/etc/sudoers.d/so100-realsense"
 
 
-def main() -> None:
+@dataclasses.dataclass
+class Config:
+    remove: bool = False
+    """Uninstall the sudoers rule instead of installing it."""
+
+
+def main(config: Config) -> None:
+    if config.remove:
+        subprocess.run(["sudo", "rm", "-f", SUDOERS_PATH], check=True)
+        print(f"removed {SUDOERS_PATH}")
+        return
     repo_root = pathlib.Path(__file__).resolve().parents[2]
     env_python = repo_root / ".pixi" / "envs" / "realsense" / "bin" / "python"
     if not env_python.exists():
@@ -53,4 +66,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main(tyro.cli(Config))

@@ -26,13 +26,15 @@ import tyro
 
 from so100_hackathon.rerun_config import LiveViewerConfig
 
-DEPTH_ENTITY = "realsense/depth/image"
-RGB_ENTITY = "realsense/rgb/image"
+ROOT_ENTITY = "realsense"
+DEPTH_ENTITY = f"{ROOT_ENTITY}/depth/image"
+RGB_ENTITY = f"{ROOT_ENTITY}/rgb/image"
+RGB_CAMERA_ENTITY = f"{ROOT_ENTITY}/rgb"
 
 
 @dataclasses.dataclass
 class Config:
-    rr_config: LiveViewerConfig
+    rr_config: LiveViewerConfig = dataclasses.field(default_factory=LiveViewerConfig)
     """Rerun viewer/save/connect wiring."""
 
     width: int = 640
@@ -74,7 +76,7 @@ def _require_device(serial: str | None) -> rs.device:
 
 def _log_camera_models(rec: rr.RecordingStream, profile: rs.pipeline_profile) -> None:
     """Log the static scene: view coordinates, both pinholes, and the depth->color extrinsics."""
-    rec.log("realsense", rr.ViewCoordinates.RDF, static=True)
+    rec.log(ROOT_ENTITY, rr.ViewCoordinates.RDF, static=True)
 
     depth_profile = profile.get_stream(rs.stream.depth).as_video_stream_profile()
     rgb_profile = profile.get_stream(rs.stream.color).as_video_stream_profile()
@@ -95,10 +97,12 @@ def _log_camera_models(rec: rr.RecordingStream, profile: rs.pipeline_profile) ->
     # camera needs extrinsics.
     rgb_from_depth = depth_profile.get_extrinsics_to(rgb_profile)
     rec.log(
-        "realsense/rgb",
+        RGB_CAMERA_ENTITY,
         rr.Transform3D(
             translation=rgb_from_depth.translation,
-            mat3x3=np.reshape(rgb_from_depth.rotation, (3, 3)),
+            # rs2_extrinsics stores the rotation column-major; a default (row-major)
+            # reshape would silently log the transpose.
+            mat3x3=np.reshape(rgb_from_depth.rotation, (3, 3), order="F"),
             relation=rr.TransformRelation.ChildFromParent,
         ),
         static=True,
@@ -119,7 +123,8 @@ def main(config: Config) -> None:
 
     pipeline = rs.pipeline()
     profile = pipeline.start(rs_config)
-    threshold = rs.threshold_filter(max_dist=config.max_depth) if config.max_depth > 0 else None
+    # min_dist=0 keeps near-field readings; the filter's default would drop depth <0.15m.
+    threshold = rs.threshold_filter(min_dist=0.0, max_dist=config.max_depth) if config.max_depth > 0 else None
     frame_count = 0
     try:
         _log_camera_models(rec, profile)
