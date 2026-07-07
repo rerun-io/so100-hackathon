@@ -19,6 +19,9 @@ from typing import Any
 import pandas as pd
 import tyro
 from datafusion import col, lit
+from rich import box
+from rich.console import Console
+from rich.table import Table
 
 os.environ.setdefault("RERUN_INSECURE_SKIP_HOST_CHECK", "1")
 
@@ -41,6 +44,17 @@ def _flatten(value: Any) -> Any:
         return value[0] if len(value) else ""
     except TypeError:
         return value
+
+
+def _print_frame(df: pd.DataFrame, *, max_cell: int | None = None) -> None:
+    """Render a DataFrame as a terminal-width-aware table (pandas' to_string ignores it)."""
+    table = Table(box=box.SIMPLE, header_style="bold")
+    for column in df.columns:
+        table.add_column(str(column), overflow="fold")
+    for row in df.itertuples(index=False):
+        cells = (str(value) for value in row)
+        table.add_row(*(cell[:max_cell] + "…" if max_cell and len(cell) > max_cell else cell for cell in cells))
+    Console().print(table)
 
 
 def _human_size(size_bytes: float) -> str:
@@ -78,12 +92,13 @@ def show_segment_table(dataset: rr.catalog.DatasetEntry, tag: str | None) -> pd.
         if column in view.columns:
             view[column] = view[column].map(_flatten)
     if {"time:start", "time:end"} <= set(df.columns):
-        view["duration"] = (df["time:end"] - df["time:start"]).dt.round("ms")  # pyrefly: ignore[missing-attribute]
+        seconds = (df["time:end"] - df["time:start"]).dt.total_seconds()  # pyrefly: ignore[missing-attribute]
+        view["duration"] = seconds.map(lambda s: f"{s:.1f}s")
     if "size" in view.columns:
         view["size"] = view["size"].map(_human_size)
     view = view.sort_values("episode").reset_index(drop=True)
-    print(f"dataset '{dataset.name}'{f', tag {tag!r}' if tag else ''}: {len(view)} episode(s)\n")
-    print(view.to_string(index=False))
+    print(f"dataset '{dataset.name}'{f', tag {tag!r}' if tag else ''}: {len(view)} episode(s)")
+    _print_frame(view)
     return view
 
 
@@ -106,12 +121,12 @@ def show_entity_series(dataset: rr.catalog.DatasetEntry, *, episode: str | None,
         raise SystemExit(f"entity '{entity}' has no data here; entities in this dataset: {entities}")
 
     scope = f"episode '{episode}'" if episode else (f"episodes tagged {tag!r}" if tag else "all episodes")
-    print(f"'{entity}' across {scope}: {len(df)} rows\n")
-    with pd.option_context("display.width", 150, "display.max_columns", 20):
-        print(df[data_columns].head(10).to_string(index=False, max_colwidth=48))
-        numeric = df[data_columns].select_dtypes("number")
-        if not numeric.empty:
-            print(f"\nsummary:\n{numeric.describe().to_string()}")
+    print(f"'{entity}' across {scope}: {len(df)} rows")
+    _print_frame(df[data_columns].head(10), max_cell=48)
+    numeric = df[data_columns].select_dtypes("number")
+    if not numeric.empty:
+        print("summary:")
+        _print_frame(numeric.describe().rename_axis("stat").reset_index())
 
 
 @dataclasses.dataclass
