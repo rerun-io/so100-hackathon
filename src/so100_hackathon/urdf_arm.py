@@ -23,6 +23,7 @@ from pathlib import Path
 import rerun as rr
 
 from so100_hackathon.calibration import CalibMode, MotorCalibration
+from so100_hackathon.cameras import FrameSink
 
 FOLLOWER_URDF_PATH = Path(__file__).parents[2] / "data" / "so100" / "so100.urdf"
 LEADER_URDF_PATH = Path(__file__).parents[2] / "data" / "so101_leader" / "so101_leader.urdf"
@@ -72,6 +73,8 @@ class UrdfArm:
     """Display sign per joint (see JOINT_DISPLAY_SIGNS)."""
     collision_geometries_path: str
     """Entity path of this model's collision meshes (for hiding in blueprints)."""
+    visual_geometries_path: str
+    """Entity path of this model's visual meshes (all a 3D blueprint view needs to include)."""
     tree: rr.urdf.UrdfTree
     """Parsed URDF, retained so the static geometry can be (re-)logged per recording."""
     urdf_path: Path
@@ -103,6 +106,7 @@ class UrdfArm:
             center_angles_rad=center_angles_rad,
             joint_signs=JOINT_DISPLAY_SIGNS[urdf_path.name],
             collision_geometries_path=f"{name}/{tree.name}/collision_geometries",
+            visual_geometries_path=f"{name}/{tree.name}/visual_geometries",
             tree=tree,
             urdf_path=urdf_path,
             color=color,
@@ -148,7 +152,7 @@ class UrdfArm:
         # angle, which floods stdout on uncalibrated arms.
         return min(max(angle, joint.limit_lower), joint.limit_upper)
 
-    def log_joints(self, rec: rr.RecordingStream, calibrated_values: list[float]) -> None:
+    def log_joints(self, rec: FrameSink, calibrated_values: list[float]) -> None:
         for joint in self.joints:
             joint_index = int(joint.name) - 1
             angle = self.joint_angle_rad(joint_index, calibrated_values[joint_index])

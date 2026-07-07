@@ -1,0 +1,177 @@
+/* The site layout (formerly the /v2/ prototype): loaded AFTER learn.css, overrides only.
+   - the course nav becomes a horizontal stepper across the top
+   - the content column widens (no 46rem cap)
+   - viewers get much more vertical space
+   - the collect card puts the fields in a vertical column next to a big viewer */
+
+/* ── Accent color: v2 is blue, not rerun-orange ─────────────────────── */
+body.v2 {
+  --primary: #186add;
+  --primary-soft: rgba(24, 106, 221, 0.16);
+}
+
+/* ── Wide layout ────────────────────────────────────────────────────── */
+body.v2 .layout {
+  display: block;
+  max-width: 88rem;
+}
+body.v2 .content {
+  max-width: none;
+  padding-top: 2rem;
+}
+/* Two concentric columns (same max-width + auto-margin trick as learn.css, but
+   per-child): prose sits in a 60% column, viewer widgets break out to 90%. */
+body.v2 .content > * {
+  max-width: 60%;
+  margin-left: auto;
+  margin-right: auto;
+}
+body.v2 .content > [data-setup],
+body.v2 .content > [data-collect],
+body.v2 .content > [data-viewer],
+body.v2 .content > .setup,
+body.v2 .content > .collect,
+body.v2 .content > .viewer-box {
+  max-width: 90%;
+}
+@media (max-width: 980px) {
+  body.v2 .content > * { max-width: none; }
+}
+
+/* ── Top chrome: header + stepper in one sticky wrapper ─────────────── */
+/* Scrolling down (learn2.js toggles body.is-condensed past 96px, back under 24px)
+   slides the header off-screen and docks a compact stepper at the top. The whole
+   motion is one compositor-only transform on the wrapper. */
+html { scroll-padding-top: 3.5rem; }
+body.v2 .chrome {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  transition: transform 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+body.v2.is-condensed .chrome { transform: translateY(-3.25rem); }
+/* Keyboard users tabbing into the hidden header get it back. */
+body.v2.is-condensed .chrome:has(.site-header :focus-visible) { transform: translateY(0); }
+body.v2 .site-header { position: static; }
+body.v2 .stepper-nav {
+  position: relative;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+/* Docked shadow, animated via pseudo-element opacity (cheaper than box-shadow). */
+body.v2 .stepper-nav::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: 0 2px 12px rgba(16, 24, 40, 0.07);
+  opacity: 0;
+  transition: opacity 260ms ease;
+}
+body.v2.is-condensed .stepper-nav::after { opacity: 1; }
+/* Same width as the prose column: 60% of the layout's inner width (88rem cap - 1.5rem
+   side padding), centered. */
+.stepper {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  margin: 0 auto;
+  padding: 0.7rem 0;
+  max-width: calc((min(88rem, 100vw) - 3rem) * 0.6);
+  transition: padding 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+@media (max-width: 980px) {
+  .stepper { max-width: none; padding: 0.7rem 1.5rem; }
+}
+.stepper li { display: flex; align-items: center; min-width: 0; }
+.stepper li:not(:first-child) { flex: 1; }
+.step-line {
+  flex: 1;
+  min-width: 1.25rem;
+  height: 2px;
+  margin: 0 0.85rem;
+  background: var(--border);
+  transition: margin 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.step-line.filled { background: var(--primary); }
+.step {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--subtle);
+  text-decoration: none;
+  min-width: 0;
+  /* Invisible hit-area extension: keeps steps >= 32px tall even when condensed. */
+  padding-block: 0.3rem;
+  margin-block: -0.3rem;
+  transition: color 120ms ease, gap 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.step:hover { color: var(--fg); }
+.step:hover .step-dot { border-color: var(--border-strong); }
+.step-dot {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bg);
+  flex-shrink: 0;
+  transition: width 200ms cubic-bezier(0.32, 0.72, 0, 1), height 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.step[data-state="done"] .step-dot { background: var(--primary); border-color: var(--primary); }
+.step[data-state="current"] { color: var(--fg); }
+.step[data-state="current"] .step-name { font-weight: 600; }
+.step[data-state="current"] .step-dot {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+.step[data-state="current"] .step-dot::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--primary);
+}
+.step-name {
+  font-size: 0.92rem;
+  white-space: nowrap;
+  line-height: 1.25;
+  transition: font-size 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* ── Condensed stepper: real size changes (not scale) so text stays crisp ─ */
+body.v2.is-condensed .stepper { padding-block: 0.4rem; }
+body.v2.is-condensed .step { gap: 0.4rem; }
+body.v2.is-condensed .step-dot { width: 0.75rem; height: 0.75rem; }
+body.v2.is-condensed .step-dot svg { width: 8px; height: 8px; }
+body.v2.is-condensed .step-name { font-size: 0.85rem; }
+body.v2.is-condensed .step-line { margin: 0 0.6rem; }
+body.v2.is-condensed .step[data-state="current"] .step-dot { box-shadow: 0 0 0 2px var(--primary-soft); }
+body.v2.is-condensed .step[data-state="current"] .step-dot::after { width: 5px; height: 5px; }
+
+@media (prefers-reduced-motion: reduce) {
+  body.v2 .chrome,
+  body.v2 .stepper-nav::after,
+  .stepper, .step, .step-dot, .step-name, .step-line {
+    transition: none;
+  }
+}
+
+/* ── Room to interact: all embedded viewers grow ────────────────────── */
+body.v2 .viewer-box { height: 70vh; }
+
+/* ── Collect + Setup cards: panel + viewer layouts; just grow the viewer ── */
+/* The viewer sets the row height; the panel stretches and scrolls internally. */
+body.v2 .collect .viewer-box,
+body.v2 .setup .viewer-box {
+  height: auto;
+  min-height: 72vh;
+}
+@media (max-width: 980px) {
+  body.v2 .collect .viewer-box,
+  body.v2 .setup .viewer-box { min-height: 60vh; }
+}

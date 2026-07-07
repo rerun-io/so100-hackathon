@@ -1,0 +1,589 @@
+/* SO-100 hackathon course site — hand-written approximation of the rerun.io/learn look. */
+
+:root {
+  --bg: #ffffff;
+  --fg: #11181c;
+  --subtle: #4b545a;
+  --muted: #7c868d;
+  --border: #e5e8ea;
+  --border-strong: #c8cED2;
+  --code-bg: #f5f7f8;
+  --primary: #e5541c;
+  --primary-soft: rgba(229, 84, 28, 0.16);
+  --action: #2563eb;
+  --action-hover: #1d4fd7;
+  --radius: 10px;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; } /* survive `display: flex` on hideable elements */
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  height: 3.25rem;
+  padding: 0 1.5rem;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+.site-title { font-weight: 700; color: var(--fg); text-decoration: none; letter-spacing: -0.01em; }
+.site-sub { color: var(--muted); font-size: 0.85rem; }
+
+/* ── Layout ─────────────────────────────────────────────────────────── */
+.layout {
+  display: flex;
+  gap: 3rem;
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: 0 1.5rem 5rem;
+}
+.content {
+  flex: 1;
+  min-width: 0;
+  max-width: 46rem;
+  padding-top: 2.5rem;
+}
+/* Pages with the wide collect widget get extra room from the flexible max-width above. */
+
+/* ── Article typography ─────────────────────────────────────────────── */
+.eyebrow {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--primary);
+  margin: 0 0 0.5rem;
+}
+h1 { font-size: 2.1rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 1rem; }
+h2 { font-size: 1.4rem; letter-spacing: -0.01em; margin: 2.2rem 0 0.6rem; }
+h3 { font-size: 1.1rem; margin: 1.8rem 0 0.4rem; }
+p, ul, ol { margin: 0.8rem 0; }
+a { color: var(--primary); }
+hr { border: none; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+
+blockquote {
+  margin: 1rem 0;
+  padding: 0.1rem 1rem;
+  border-left: 3px solid var(--primary);
+  background: var(--code-bg);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--subtle);
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.1em 0.35em;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1.1rem;
+  overflow-x: auto;
+  line-height: 1.55;
+}
+pre code { background: none; border: none; padding: 0; font-size: 0.85rem; }
+
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.92rem; }
+th, td { border: 1px solid var(--border); padding: 0.45rem 0.7rem; text-align: left; }
+th { background: var(--code-bg); }
+
+/* A callout card: small uppercase header + text, authored as raw HTML in the markdown
+   (<aside class="highlight"><h2>...</h2><p>...</p></aside>). */
+.highlight {
+  margin: 1.5rem 0 2rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+}
+.highlight h2 {
+  margin: 0 0 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.highlight p { margin: 0; }
+
+/* ── Prev/next footer ───────────────────────────────────────────────── */
+.pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 3.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+.pager-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-width: 48%;
+  color: var(--fg);
+  text-decoration: none;
+  font-weight: 500;
+}
+.pager-link:hover { color: var(--primary); }
+.pager-next { text-align: right; margin-left: auto; }
+.pager-dir { font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.pager-done { color: var(--muted); font-weight: 400; }
+
+/* ── Embedded viewer ────────────────────────────────────────────────── */
+.viewer-box {
+  position: relative;
+  height: 520px;
+  margin: 1.2rem 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #0d1011;
+}
+/* The canvas is sized HERE, not via viewer options: the viewer's fullscreen exit wipes
+   all inline styles off the canvas, so any inline sizing would be lost (unsized canvas,
+   WASM panic). CSS survives that. */
+.viewer-box canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none !important;
+}
+.viewer-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  text-align: center;
+  padding: 1rem;
+  color: #cfd6da;
+  background: #0d1011;
+  font-size: 0.95rem;
+}
+.viewer-overlay code { background: #1d2428; border-color: #2c353b; color: #ffb59a; }
+.viewer-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: #cfd6da;
+  background: #0d1011;
+  font-size: 0.95rem;
+}
+.viewer-loading .spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #2c353b;
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+.overlay-cmd { display: flex; align-items: center; gap: 0.5rem; }
+.copy-btn {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid #2c353b;
+  background: #1d2428;
+  color: #cfd6da;
+  cursor: pointer;
+}
+.copy-btn:hover { border-color: var(--primary); color: #fff; }
+.viewer-overlay .spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #2c353b;
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Setup accordion (Set up page): 3-step panel + ONE shared viewer ── */
+/* Only one setup tool runs at a time server-side, so one viewer is the honest
+   representation. Left: single-open accordion, one section per step. */
+.setup {
+  margin: 1.8rem 0 2.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(15, 23, 30, 0.04);
+}
+.setup-body { display: flex; align-items: stretch; }
+.setup-panel {
+  flex: 0 0 20rem;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+@media (max-width: 860px) {
+  .setup-body { flex-direction: column; }
+  .setup-panel { flex: none; border-right: none; border-bottom: 1px solid var(--border); }
+}
+
+.setup-step { border-bottom: 1px solid var(--border); }
+.setup-step:last-child { border-bottom: none; }
+
+.setup-step-bar { display: flex; align-items: center; gap: 0.5rem; padding-right: 0.9rem; }
+.setup-step-bar:hover { background: var(--code-bg); }
+.setup-step-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 0 0.85rem 0.9rem;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+}
+.setup-step-title { font-weight: 650; font-size: 0.95rem; letter-spacing: -0.01em; }
+.setup-step-head .setup-badge { font-size: 0.62rem; padding: 0.15rem 0.5rem; }
+.setup-chevron { flex-shrink: 0; color: var(--muted); transition: transform 160ms ease; }
+.setup-step.open .setup-chevron { transform: rotate(90deg); }
+
+/* Blinking dot = this tool is live. Blue: red stays reserved for recording (Collect). */
+.setup-live {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: rec-blink 1s step-start infinite;
+}
+
+.setup-step-body { display: flex; flex-direction: column; gap: 0.7rem; padding: 0.1rem 0.9rem 1rem; }
+.setup-step-desc { margin: 0; font-size: 0.85rem; line-height: 1.5; color: var(--subtle); }
+.setup-step-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.overlay-title {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.overlay-sub { font-size: 0.85rem; color: #8a949a; }
+
+.setup-badge {
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: #e5f4e9;
+  border: 1px solid #b5dfc0;
+  color: #1d7a36;
+  white-space: nowrap;
+}
+.setup-error { margin: 0; color: #c02626; font-size: 0.82rem; }
+.setup .viewer-box {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  height: 560px;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+}
+@media (max-width: 860px) {
+  .setup .viewer-box { border-left: none; }
+}
+.setup-action {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.9rem;
+  border-radius: 2px;
+  border: none;
+  background: var(--action);
+  color: #fff;
+  cursor: pointer;
+  margin-bottom: 0.4rem;
+  white-space: nowrap;
+}
+.setup-action:hover:not(:disabled) { background: var(--action-hover); }
+.setup-action:disabled { opacity: 0.4; cursor: default; }
+.setup-offline, .setup-busy {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  color: #7c868d;
+}
+
+/* ── Collect widget (Recording / Livestream tabs, episode side panel + viewer) ─ */
+.collect {
+  margin: 1.2rem 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(15, 23, 30, 0.04);
+}
+
+.collect-tabs {
+  display: flex;
+  gap: 1.4rem;
+  padding: 0.85rem 1.3rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.collect-tab {
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0 0 0.6rem;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.collect-tab:hover { color: var(--fg); }
+.collect-tab.active { color: var(--fg); border-bottom-color: var(--fg); }
+
+.collect-body { display: flex; align-items: stretch; }
+.collect-panel {
+  flex: 0 0 17rem;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+.panel-record, .panel-live {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1rem 1.1rem 1.1rem;
+  height: 100%;
+}
+@media (max-width: 860px) {
+  .collect-body { flex-direction: column; }
+  .collect-panel { flex: none; border-right: none; border-bottom: 1px solid var(--border); }
+}
+
+.panel-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--subtle);
+}
+.panel-field input[type="text"],
+.panel-field textarea,
+.panel-field select {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  resize: vertical;
+}
+.panel-field input:disabled,
+.panel-field textarea:disabled,
+.panel-field select:disabled { background: var(--code-bg); color: var(--muted); cursor: default; }
+
+/* One episode at a time: id navigator + its properties, grouped on a grey card. */
+.episode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.8rem 0.85rem;
+  background: var(--code-bg);
+  border-radius: 8px;
+}
+.episode-card.slide-in { animation: episode-slide 260ms ease; }
+@keyframes episode-slide {
+  from { transform: translateX(16px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.episode-card .panel-field textarea,
+.episode-card .panel-field select { background: var(--bg); }
+
+.episode-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+.episode-nav button {
+  font: inherit;
+  font-size: 1.05rem;
+  line-height: 1;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--subtle);
+  cursor: pointer;
+}
+.episode-nav button:hover:not(:disabled) { background: var(--border); color: var(--fg); }
+.episode-nav button:disabled { opacity: 0.3; cursor: default; }
+.episode-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+/* Episode state: nothing (upcoming), a blinking red dot (recording), a green ✓ (saved). */
+.episode-glyph { display: inline-flex; align-items: center; }
+.episode-glyph.saved { color: #1d7a36; }
+.episode-glyph.rec::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #dc2626;
+  animation: rec-blink 1s step-start infinite;
+}
+
+.save-btn {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.9rem;
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.save-btn:hover:not(:disabled) { border-color: var(--fg); }
+.save-btn:disabled { opacity: 0.45; cursor: default; }
+.save-btn.saved { border-color: #b5dfc0; background: #e5f4e9; color: #1d7a36; opacity: 1; }
+
+.episode-note { color: #1d7a36; font-size: 0.78rem; line-height: 1.4; }
+
+.panel-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: auto;
+}
+.panel-buttons .collect-btn, .panel-live .collect-btn { justify-content: center; }
+.stop-btn:not(:disabled) { background: #11181c; border-color: #11181c; color: #fff; }
+.stop-btn:not(:disabled):hover { border-color: #11181c; opacity: 0.9; }
+
+.live-sub { margin: 0; font-size: 0.85rem; line-height: 1.5; color: var(--subtle); }
+
+.record-hint { display: flex; align-items: center; gap: 0.4rem; }
+.record-hint .collect-link { color: #cfd6da; margin-left: 0; }
+
+.collect-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.9rem;
+  border-radius: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.collect-btn.primary { background: var(--action); border: 1px solid var(--action); color: #fff; }
+.collect-btn.primary:hover:not(:disabled) { background: var(--action-hover); border-color: var(--action-hover); }
+.collect-btn.primary:disabled { opacity: 0.4; cursor: default; }
+.collect-btn.outline { background: var(--bg); border: 1px solid var(--border-strong); color: var(--fg); }
+.collect-btn.outline:hover:not(:disabled) { border-color: var(--fg); }
+.collect-btn.outline:disabled { opacity: 0.4; cursor: default; }
+.collect-btn.recording { background: #dc2626; border-color: #dc2626; color: #fff; opacity: 1; cursor: default; }
+
+/* The record icon: a ring with an inner dot that blinks while recording. */
+.rec-dot {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.rec-dot::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+.recording .rec-dot::after { animation: rec-blink 1s step-start infinite; }
+@keyframes rec-blink { 50% { opacity: 0; } }
+.stop-square { width: 9px; height: 9px; background: currentColor; flex-shrink: 0; }
+
+.collect-link {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.82rem;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--fg);
+  text-decoration: underline;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.status-error { color: #c02626; font-size: 0.82rem; padding: 0.4rem 1.3rem 0; }
+.collect-panel .status-error { padding: 0 1.1rem 0.9rem; }
+
+.collect .viewer-box {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  height: 560px;
+  border: none;
+  border-radius: 0;
+}
+.fake-check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: #7c868d;
+  cursor: pointer;
+}

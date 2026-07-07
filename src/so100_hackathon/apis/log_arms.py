@@ -22,12 +22,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import rerun as rr
+import rerun.blueprint as rrb
 
 from so100_hackathon.blueprint import create_blueprint
 from so100_hackathon.calibration import MotorCalibration, fallback_calibration, load_arm_kind, load_arm_ranges, load_calibration
-from so100_hackathon.cameras import CameraStreamer, detect_camera_indices
+from so100_hackathon.cameras import CameraStreamer, FrameSink, detect_camera_indices
 from so100_hackathon.feetech import FeetechBus, MotorTelemetry, detect_arm_ports, usb_id_from_port
 from so100_hackathon.rerun_config import LiveViewerConfig
+from so100_hackathon.setup_phases import announce_phase
 from so100_hackathon.urdf_arm import FOLLOWER_URDF_PATH, LEADER_URDF_PATH, MATTE_BLACK, UrdfArm
 
 # entity subpath -> attribute of MotorTelemetry (calibrated position is logged separately)
@@ -160,8 +162,16 @@ def _open_arms(config: LogArmsConfig, rec: rr.RecordingStream) -> list[Arm]:
                 flush=True,
             )
     resolved.sort(key=lambda arm: not arm.is_leader)  # leader first -> leftmost
+    # Entity names default to the USB serial id, but once roles are known plain
+    # "leader"/"follower" reads much better in the viewer. Keep explicit --names, and
+    # keep the serials when roles are unknown or would collide (e.g. two followers).
+    if not config.names:
+        roles = ["leader" if arm.is_leader else "follower" for arm in resolved]
+        if all(arm.is_leader is not None for arm in resolved) and len(set(roles)) == len(roles):
+            for arm, role in zip(resolved, roles, strict=True):
+                arm.name = role
     for arm in resolved:
-        print(f"{arm.name}: {'LEADER' if arm.is_leader else 'follower'}", flush=True)
+        print(f"{arm.name}: {'LEADER' if arm.is_leader else 'follower'} on {arm.port}", flush=True)
 
     arms: list[Arm] = []
     for i, res in enumerate(resolved):
@@ -190,7 +200,7 @@ def _open_arms(config: LogArmsConfig, rec: rr.RecordingStream) -> list[Arm]:
     return arms
 
 
-def _log_arm(arm: Arm, rec: rr.RecordingStream) -> None:
+def _log_arm(arm: Arm, rec: FrameSink) -> None:
     telemetry: list[MotorTelemetry] = arm.bus.read_telemetry()
     calibrated = [calib.calibrated_from_raw(t.position_raw) for calib, t in zip(arm.calibration, telemetry, strict=True)]
     arm.last_calibrated = calibrated
@@ -201,7 +211,7 @@ def _log_arm(arm: Arm, rec: rr.RecordingStream) -> None:
         arm.urdf.log_joints(rec, calibrated)
 
 
-def _drive_follower(leader: Arm, follower: Arm, *, rec: rr.RecordingStream, blend: float, max_step: float | None) -> None:
+def _drive_follower(leader: Arm, follower: Arm, *, rec: FrameSink, blend: float, max_step: float | None) -> None:
     """Mirror the leader: leader calibrated values -> follower raw ticks -> Goal_Position.
 
     ``blend`` < 1 eases the follower from its own pose toward the leader's (startup ramp);
@@ -230,19 +240,23 @@ class ArmSession:
     Unlike ``main`` (which owns the viewer and its own loop), this opens the hardware once
     and, on :meth:`start`, runs its own background loop that reads every arm, optionally
     drives the follower to mirror the leader (teleop), and logs a frame -- continuously, into
-    :attr:`rec`. :meth:`begin` swaps :attr:`rec` (and the sinks are swapped alongside), which
-    is how the collector starts/stops *takes* without interrupting teleop or the live view.
+    :attr:`rec`. :meth:`set_output` swaps :attr:`rec`, which is how the collector tees frames
+    into a take file (a :class:`~so100_hackathon.cameras.RecordingFanout` of live + file)
+    without interrupting teleop or the live view.
 
     * :meth:`start` — arm the follower (if teleop) and start the camera + logging threads.
       Call once a log sink is attached.
-    * :meth:`begin` — redirect the session (and its cameras) to ``rec``, then (re-)log the
-      static per-motor series, URDF meshes, and blueprint into it; called for each new take.
+    * :meth:`begin` — log the static per-motor series, URDF meshes, and blueprint into
+      ``rec``, then redirect the session there; called once per new recording (a take file
+      needs its own copy of the statics).
+    * :meth:`set_output` — just redirect the frame loops (no statics); used to tee into a
+      take and to fall back to the live stream when the take ends.
     * :meth:`close` — stop the threads, release the follower's torque, close the buses.
     """
 
     def __init__(self, config: LogArmsConfig, rec: rr.RecordingStream) -> None:
         self.config = config
-        self.rec = rec
+        self.rec: FrameSink = rec
         self.arms = _open_arms(config, rec)
         camera_indices = detect_camera_indices() if config.cameras is None else config.cameras
         self.streamers = [CameraStreamer(index, rec=rec, jpeg_quality=config.jpeg_quality) for index in camera_indices]
@@ -301,11 +315,14 @@ class ArmSession:
         self._thread = threading.Thread(target=self._run, name="arm-session", daemon=True)
         self._thread.start()
 
-    def begin(self, rec: rr.RecordingStream) -> None:
-        # Redirect this session's loop and its camera threads into rec (they snapshot it per frame).
+    def set_output(self, rec: FrameSink) -> None:
+        # Redirect this session's loop and its camera threads (they snapshot the sink per frame).
         self.rec = rec
         for streamer in self.streamers:
             streamer.rec = rec
+
+    def begin(self, rec: rr.RecordingStream) -> None:
+        self.set_output(rec)
         for arm in self.arms:
             motor_names = [calib.motor_name for calib in arm.calibration]
             for subpath in METRIC_SUBPATHS:
@@ -315,15 +332,17 @@ class ArmSession:
         if self._follower is not None:
             goal_names = [f"{calib.motor_name} goal" for calib in self._follower.calibration]
             rec.log(f"{self._follower.name}/goal", rr.SeriesLines(names=goal_names), static=True)
-        rec.send_blueprint(
-            create_blueprint(
-                [arm.name for arm in self.arms],
-                camera_paths=[streamer.entity_path for streamer in self.streamers],
-                collision_paths=[arm.urdf.collision_geometries_path for arm in self.arms if arm.urdf is not None],
-                show_urdf=self.config.urdf,
-                window_seconds=self.config.window_seconds,
-            ),
-            make_active=True,
+        rec.send_blueprint(self.blueprint(), make_active=True)
+
+    def blueprint(self) -> rrb.Blueprint:
+        """This session's viewer layout (also saved as the catalog datasets' default blueprint)."""
+        return create_blueprint(
+            [arm.name for arm in self.arms],
+            leader_name=next((arm.name for arm in self.arms if arm.is_leader), None),
+            camera_paths=[streamer.entity_path for streamer in self.streamers],
+            visual_paths=[arm.urdf.visual_geometries_path for arm in self.arms if arm.urdf is not None],
+            show_urdf=self.config.urdf,
+            window_seconds=self.config.window_seconds,
         )
 
     def _run(self) -> None:
@@ -391,6 +410,7 @@ class ArmSession:
 
 def main(config: LogArmsConfig) -> None:
     rec = config.rr_config.rec
+    rec.send_recording_name("Teleop" if config.teleop else "Ping test")
     arms = _open_arms(config, rec)
 
     # Name the per-motor series once, statically, so plot legends show joint names.
@@ -424,8 +444,9 @@ def main(config: LogArmsConfig) -> None:
     rec.send_blueprint(
         create_blueprint(
             [arm.name for arm in arms],
+            leader_name=next((arm.name for arm in arms if arm.is_leader), None),
             camera_paths=[streamer.entity_path for streamer in streamers],
-            collision_paths=[arm.urdf.collision_geometries_path for arm in arms if arm.urdf is not None],
+            visual_paths=[arm.urdf.visual_geometries_path for arm in arms if arm.urdf is not None],
             show_urdf=config.urdf,
             window_seconds=config.window_seconds,
         ),
@@ -441,6 +462,7 @@ def main(config: LogArmsConfig) -> None:
     write_errors = 0
     teleop_t0: float | None = None  # ramp anchor; None whenever driving is paused, so resuming glides again
     print(f"streaming {len(arms)} arm(s) + {len(streamers)} camera(s) at target {config.fps:.0f} Hz (Ctrl-C to stop)...", flush=True)
+    announce_phase("running")  # tells the data server (and thus the course site) that the feed is live
     try:
         if leader_arm is not None and follower_arm is not None:
             # Arm the follower inside try/finally (and after the slow camera probing above),

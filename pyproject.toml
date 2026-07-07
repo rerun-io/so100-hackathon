@@ -23,7 +23,8 @@ numpy = "*"
 tyro = "*"
 pyserial = "*"
 py-opencv = "*"
-uv = "*"  # dataset_collector's "export to LeRobot" runs rerun-lerobot via `uvx` (isolated env)
+pandas = "*"
+rich = "*"
 
 [tool.pixi.target.osx-arm64.dependencies]
 # Camera enumeration in OpenCV's exact index order (to skip the built-in webcam).
@@ -31,10 +32,27 @@ pyobjc-framework-avfoundation = "*"
 
 [tool.pixi.pypi-dependencies]
 so100_hackathon = { path = ".", editable = true }
-# rerun-sdk from PyPI: conda-forge lags behind (0.34 not packaged there yet).
-rerun-sdk = "==0.34.0"
+# Pinned back to 0.33.1: the 0.34 web viewer cannot talk grpc-web to `rr.server.Server`
+# (tonic-web-wasm-client 0.8.0 drops the grpc-status trailer; strict tonic 0.14 rejects
+# the stream). Restore 0.34 once RR-5147 ships in a release.
+rerun-sdk = "==0.33.1"
 feetech-servo-sdk = ">=1.0.0"
-datafusion = ">=53,<54"
+datafusion = ">=52,<53"  # rerun-sdk 0.33 requires datafusion major 52
+markdown = ">=3.6"
+
+# LeRobot pins an older rerun-sdk which conflicts with ours, so the export env is fully
+# isolated (no default feature). export_lerobot.py (default env) queries the catalog and
+# stages episodes to disk, then spawns the writer in this env to produce LeRobot v3.
+[tool.pixi.feature.export.dependencies]
+python = ">=3.11,<3.13"  # torch has no wheels for newer interpreters yet
+ffmpeg = "7.*"  # torchcodec (lerobot's video reader) supports ffmpeg 4-7
+
+[tool.pixi.feature.export.pypi-dependencies]
+lerobot = "==0.4.2"
+
+[tool.pixi.tasks.export-lerobot]
+cmd = "python tools/apps/export_lerobot.py"
+description = "Export a recorded dataset to LeRobot v3 under datasets/ (--push to upload to the Hugging Face Hub)"
 
 [tool.pixi.feature.dev.dependencies]
 ruff = "*"
@@ -74,18 +92,32 @@ description = "Find dead code in the package"
 [tool.pixi.environments]
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
+export = { features = ["export"], no-default-feature = true }
 
-# rerun-lerobot can't live in the solve: it pulls in `lerobot` (torch, opencv, wandb, ... all
-# core deps). The collector's "export to LeRobot" runs it in an isolated `uvx` env instead, so
-# that heavy tree never enters our env. This task just pre-warms that env (optional; the first
-# export builds it on demand).
-[tool.pixi.tasks.warm-lerobot]
-cmd = "uvx --from 'rerun-lerobot>=0.3.0' rerun-lerobot --help"
-description = "Pre-build the isolated uvx env for the dataset collector's 'export to LeRobot' button"
+[tool.pixi.tasks.so100-server]
+cmd = "python tools/apps/so100_server.py"
+description = "Long-lived local data server: gRPC proxy + catalog (re-registers recordings/ on startup) + control API for recording episodes (--fake for camera-only)"
+env = { RUST_BACKTRACE = "1" }
 
-[tool.pixi.tasks.dataset-collector]
-cmd = "python tools/apps/dataset_collector.py"
-description = "Collect SO-100 datasets: browser start/stop, tee arm recordings to disk + register in a local Rerun catalog (--fake for a synthetic stream)"
+[tool.pixi.tasks.learn]
+cmd = "python tools/apps/learn_site.py"
+description = "Serve the hackathon course site on http://localhost:3000 (--build DIR for a static export)"
+
+[tool.pixi.tasks.ports]
+cmd = "lsof -nP -iTCP:9876 -iTCP:51234 -iTCP:8000 -iTCP:3000 -sTCP:LISTEN || echo 'all course ports are free (9876 proxy, 51234 catalog, 8000 control API, 3000 course site)'"
+description = "Show which of the course's ports are occupied and by what (9876 proxy, 51234 catalog, 8000 control API, 3000 course site)"
+
+[tool.pixi.tasks.record-episode]
+cmd = "python tools/apps/record_episode.py"
+description = "Record one episode from the CLI to recordings/<dataset>/<episode>.rrd (with task + tag properties) and register it to the local catalog"
+
+[tool.pixi.tasks.query-dataset]
+cmd = "python tools/apps/query_dataset.py"
+description = "Query the local catalog: list datasets, per-episode metadata table (--dataset), tag filter (--tag), entity series to pandas (--entity)"
+
+[tool.pixi.tasks.replay-episode]
+cmd = "python tools/apps/replay_episode.py"
+description = "Replay a recorded episode's action trajectory on the follower arm (--speed 0.5 for half speed)"
 
 [tool.pixi.tasks.log-so100]
 cmd = "python tools/apps/log_so100.py"
@@ -110,7 +142,7 @@ min_confidence = 60
 # handler hooks (dataset_collector), and its _rec recording-stream keep-alive.
 ignore_names = [
     "rr_config", "rec_stream", "speed_ticks_s", "load_pct", "voltage_v", "temperature_c", "current_ma",
-    "do_GET", "do_POST", "log_message", "args", "_rec",
+    "do_GET", "do_POST", "do_OPTIONS", "log_message", "args", "_rec",
 ]
 
 [tool.ruff]

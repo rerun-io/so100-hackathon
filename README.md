@@ -1,141 +1,130 @@
 # so100-hackathon
 
-Realtime SO-100 arm logging into [Rerun](https://rerun.io): joint telemetry, webcam streams,
-and a live-animated URDF per arm. Python port of the internal Rust setup in
-[rerun-io/portugal](https://github.com/rerun-io/portugal), using the modern Rerun SDK
-(`rr.urdf.UrdfTree`, coordinate frames, blueprints).
+Teach an SO-100 arm a task, end to end: teleoperated data collection into
+[Rerun](https://rerun.io) recordings, curation via a local catalog, export to LeRobot v3
+for training, and replay back on the arm. Ported from the internal Rust setup in
+[rerun-io/portugal](https://github.com/rerun-io/portugal); the SO-ARM100 URDF in
+`data/so100/` comes from rerun's `examples/python/animated_urdf`.
 
-<https://github.com/rerun-io/rerun> `examples/python/animated_urdf` is the reference for the
-URDF animation; the SO-ARM100 model in `data/so100/` comes from that example's data.
+**Start with the course site** — it walks through everything below step by step, with an
+embedded live viewer and a recording UI, starting from cloning this repo:
 
-## Setup
+> **https://so100-hackathon.vercel.app** *(not deployed yet — serve it locally with
+> `pixi run learn` → http://localhost:3000)*
 
-Everything runs through [Pixi](https://pixi.sh) — install it first if you don't have it
-([install docs](https://pixi.prefix.dev/latest/installation/)):
+Prefer the terminal? This README is the terse, CLI-only mirror of the same six steps —
+pick either path, they produce the same datasets.
+
+## Welcome
+
+Everything runs through [Pixi](https://pixi.sh) — install it, then the repo:
 
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh
-```
-
-Then, from the repo root:
-
-```bash
 pixi install
 ```
 
 Plug in the arm(s) — they show up as `/dev/cu.usbmodem<USB_ID>`.
 
-## Stream
+## Set up: test and calibrate your robot
 
 ```bash
-pixi run log-so100                        # spawn a viewer, stream everything live
-pixi run log-so100 --rr-config.connect    # stream to an already-open viewer
-pixi run log-so100 --rr-config.save out.rrd   # ALSO record to a .rrd while viewing
+pixi run log-so100                        # smoke test: viewer + telemetry + cameras + animated URDF
+pixi run calibrate-so100 leader           # move the LEADER arm; follow the prompts
+pixi run calibrate-so100 follower         # same, for the follower
+pixi run teleop-so100                     # follower mirrors the leader (torque ON, Ctrl-C releases)
 ```
 
-What gets logged, per arm (named by USB id unless you pass `--names leader follower`):
+Calibration is two steps per arm: hold the **middle pose** (match the gray target URDF,
+Enter), then **sweep every joint** through its range (Enter). It writes
+`calibrations/<USB_ID>.json` — including which arm is the leader — so later runs need no
+flags. Teleop clamps follower goals to the swept range, glides to the leader's pose on
+start instead of jumping, and always releases torque on exit.
 
-| entity | content |
-| --- | --- |
-| `<arm>/position` | calibrated degrees (gripper: 0-100%), one series per joint |
-| `<arm>/position_raw`, `speed`, `load`, `current`, `voltage`, `temperature` | raw servo telemetry |
-| `<arm>/so_arm100/...` | URDF meshes, animated from live joints |
-| `camera/cam<N>` | JPEG-compressed webcam frames (threads, wall-clock timestamps) |
+Logged per arm: `<arm>/position` (calibrated degrees; gripper 0-100%), raw servo
+telemetry (`position_raw`, `speed`, `load`, `current`, `voltage`, `temperature`), the
+animated URDF, `camera/cam<N>` JPEG frames — plus `<follower>/goal` (the commanded pose,
+i.e. the *action*) during teleop.
 
-Useful flags: `--fps 60`, `--cameras 1 2` (pick specific cameras; `--cameras` alone disables),
-`--no-urdf`, `--seconds 10`, `--rr-config.headless` (required in shells without a display,
-otherwise logging wedges when the viewer can't spawn).
+## Collect: record episodes to a dataset
 
-## Calibrate
-
-Uncalibrated arms plot raw-centered degrees and animate the URDF with guessed offsets.
-Calibration follows the standard lerobot procedure (`lerobot-calibrate`), one arm per run
-in either order — each arm's calibration is independent, keyed by its USB id:
+Start the long-lived local data server once and leave it running (through breaks, closed
+browser tabs, new datasets):
 
 ```bash
-pixi run calibrate-so100 leader --rr-config.connect     # then wiggle the LEADER arm
-pixi run calibrate-so100 follower --rr-config.connect   # then wiggle the follower arm
+pixi run so100-server     # gRPC proxy :9876 + catalog :51234 + control API :8000
 ```
 
-The `leader`/`follower` argument is required — which arm you're calibrating is always
-explicit, and it's stamped into the calibration file so `log-so100` never guesses.
+On startup it re-registers every `recordings/<dataset>/<episode>.rrd` found on disk, so
+restarting it loses nothing. It does **not** hold the serial ports — arms attach on
+demand, so calibration/teleop work while it runs.
 
-With several arms plugged in, the tool asks you to **wiggle a joint on the arm you want**
-and selects its port automatically (no need to know which `/dev/cu.usbmodem*` is which;
-`--port` still works as an override).
-
-The viewer shows two URDF arms: **gray = target pose**, the other (black leader / white
-follower) = live view of your arm. Torque is off, so you can move the arm freely by hand.
-
-1. **Middle pose** — move the arm to the middle of its range of motion (match the gray
-   target), hold it still, press Enter. This pose defines 0° for every joint. Like
-   lerobot's half-turn homing, the offset is **written to each servo's EEPROM** so the
-   middle reads ~2047 ticks — the 0/4095 tick wrap ends up half a turn away and can never
-   be crossed during normal motion (an arm whose joints happen to sit near the wrap
-   otherwise gets ±360° jumps).
-2. **Range sweep** — move every joint except `wrist_roll` (full-turn joint, auto 0-4095)
-   through its full range of motion, including fully closing/opening the gripper (leader:
-   squeeze/release the trigger). A live min/pos/max table shows progress. Press Enter when
-   done. The swept range is also written to the servos' position-limit registers.
-
-Joint directions aren't calibrated per arm — like lerobot, they follow the standard
-assembly convention (flip an entry in `DRIVE_SIGNS` in `apis/calibrate.py` if a
-non-standard build mirrors a joint).
-
-Writes `calibrations/<USB_ID>.json` (portugal / lerobot-v0 format, plus recorded
-`range_min`/`range_max` and `kind`), which `log-so100` picks up automatically on the next
-run — including which arm is the leader, so the black leader model and white follower model
-appear without any flags, leader placed leftmost. If left/right looks mirrored from your
-vantage point, pass `--arm-spacing -0.4`. Verify by moving the arms and checking the URDFs
-mirror them; positions in the plots are now physical degrees relative to the middle pose
-(gripper/trigger: 0-100%).
-
-## Teleoperate
-
-Once both arms are calibrated, the follower can mirror the leader (same scheme as
-portugal's `follow.rs` and `lerobot-teleoperate`: leader positions normalized through its
-calibration, denormalized through the follower's, written as `Goal_Position` — no IK):
+Record an episode from the CLI (`tools/apps/record_episode.py` — it opens the arms
+itself, so the server must not be holding them):
 
 ```bash
-pixi run teleop-so100                          # log-so100 --teleop --fps 60
-pixi run teleop-so100 --rr-config.connect      # stream into an already-open viewer
+pixi run record-episode -- --dataset my_task --task "Pick up the ball" --tag "Good episode"
 ```
 
-Move the leader by hand; the follower tracks it. Everything from `log-so100` still runs
-(telemetry, URDFs, cameras), plus the commanded pose is plotted as `<follower>/goal` on
-top of the measured position, so tracking lag is directly visible.
+Teleop runs while it records; Enter stops (or `--seconds N`). The episode name defaults
+to `episode_<N>`, auto-incremented. The take is written to
+`recordings/<dataset>/<episode>.rrd` with the name, task, and tag stamped on as
+recording properties, then registered to the catalog (or, if the server is down, picked
+up by its next startup scan).
 
-Safety, since teleop turns the follower's torque ON:
-
-- goals are clamped to the follower's recorded range-of-motion sweep, so it can't be
-  commanded past the limits found during calibration
-- on start the follower **glides** to the leader's pose over ~1.5 s instead of jumping —
-  still, roughly match the arm poses before starting
-- torque is released on exit (Ctrl-C included); if the leader disconnects mid-run the
-  follower simply holds its last pose until the leader is back
-- `--max-relative-target 5` additionally caps each per-tick goal change to ±5° (off by
-  default, matching lerobot)
-
-## Collect a dataset
-
-A browser-based collector that records takes to disk and registers them in a local Rerun
-catalog:
+Alternatively drive the server's control API — this is exactly what the course site's
+Collect page does:
 
 ```bash
-pixi run dataset-collector   # then open http://localhost:8000
+curl -X POST localhost:8000/arms/connect
+curl -X POST localhost:8000/live/pause          # pause the live stream (and /live/resume: same stream continues)
+curl -X POST localhost:8000/start -d '{"dataset":"my_task","episode":"episode_1","task":"Pick up the ball"}'
+curl -X POST localhost:8000/stop  -d '{"tag":"Good episode"}'
+curl -X POST localhost:8000/episode/update -d '{"task":"Pick up the ball","tag":"Bad episode"}'  # fix the last episode's metadata
+curl -X POST localhost:8000/arms/disconnect     # frees the serial ports again
 ```
 
-Start/stop records takes. **export to LeRobot** converts every recorded `.rrd` into a
-[LeRobot](https://github.com/huggingface/lerobot) v3 dataset under `lerobot/` (arm goal ->
-`action`, arm position -> `observation.state`, each camera -> `observation.images.camN`,
-JPEG frames re-encoded to h264). It runs
-[`rerun-lerobot`](https://github.com/rerun-io/rerun-lerobot) in an isolated `uvx` env, so
-`lerobot`'s heavy tree (torch, opencv, ...) stays out of this env. The first export builds
-that env on demand; pre-build it with:
+## Refine: enrich, query, curate
 
 ```bash
-pixi run warm-lerobot
+pixi run query-dataset                                      # list datasets in the catalog
+pixi run query-dataset -- --dataset my_task                 # per-episode table: task, tag, duration, size
+pixi run query-dataset -- --dataset my_task --tag "Good episode"
+pixi run query-dataset -- --dataset my_task --episode episode_1 --entity follower/position
 ```
+
+The metadata stamped at record time comes back as `property:...` columns on the
+catalog's segment table — that's what the tag filter runs on (DataFusion), and the
+entity query returns a pandas DataFrame.
+
+## Train: prepare for training
+
+Export to LeRobot v3 (only `"Good episode"` takes by default; `--tag ""` for all):
+
+```bash
+pixi run export-lerobot -- --dataset my_task --repo-id <hf-user>/my_task           # -> datasets/<hf-user>/my_task
+pixi run -e export hf auth login                                                   # once
+pixi run export-lerobot -- --dataset my_task --repo-id <hf-user>/my_task --push    # + upload (private repo)
+```
+
+The first run solves the isolated `export` environment — LeRobot's rerun-sdk pin
+conflicts with the repo's, so `tools/apps/export_lerobot.py` stages episodes from the
+catalog and hands off to `_export_lerobot_writer.py` inside that env. Then train with
+LeRobot as usual (`lerobot-train --policy.type=act --dataset.repo_id=<hf-user>/my_task ...`).
+
+## Deploy: close the loop
+
+Replay a recorded episode's action trajectory on the follower (leader not needed; make
+sure the server isn't holding the arms):
+
+```bash
+pixi run replay-episode -- --dataset my_task --episode episode_1 --speed 0.5
+```
+
+It ramps gently to the starting pose, plays the trajectory, streams the replayed joints
+to the live proxy, and releases torque when done. Keep a hand near the arm on the first
+run. From here, a trained policy is the same loop with actions computed live — see the
+course's Deploy page.
 
 ## Development
 
