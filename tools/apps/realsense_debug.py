@@ -7,6 +7,13 @@ off it via the factory extrinsics, so the 3D view fuses the depth cloud with col
     pixi run -e realsense realsense-debug                     # spawn a viewer, Ctrl-C to stop
     pixi run -e realsense realsense-debug -- --seconds 10
     pixi run -e realsense realsense-debug -- --rr-config.save realsense.rrd
+
+macOS 12+ denies libusb access to the camera for non-root processes ("failed to set
+power state"), so on Mac use ``pixi run -e realsense realsense-debug-sudo``. For a
+passwordless setup, install a machine-local sudoers rule (one-time)::
+
+    echo "$USER ALL=(root) NOPASSWD: $PWD/.pixi/envs/realsense/bin/python" \
+        | sudo tee /etc/sudoers.d/so100-realsense && sudo chmod 440 /etc/sudoers.d/so100-realsense
 """
 
 from __future__ import annotations

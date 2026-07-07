@@ -63,6 +63,21 @@ pyrealsense2 = "*"
 cmd = "python tools/apps/realsense_debug.py"
 description = "Debug: stream RealSense color + depth into a Rerun viewer (standalone, no arms needed)"
 
+# macOS 12+ denies libusb access to the RealSense for normal processes (the
+# conda-forge build uses the RSUSB/libusb backend), so the capture process must run
+# as root. Only capture elevates: the viewer is spawned as the login user first
+# (idempotent — rr.spawn is a no-op when a viewer already owns the port), then the
+# sudo'd capture connects to it over gRPC. Passwordless setup: see the sudoers note
+# in tools/apps/realsense_debug.py.
+[tool.pixi.feature.realsense.tasks._realsense-viewer]
+cmd = "python -c 'import rerun as rr; rr.spawn(connect=False, recording=rr.RecordingStream(\"so100\"))'"
+description = "internal: ensure a Rerun viewer is running as the login user"
+
+[tool.pixi.feature.realsense.tasks.realsense-debug-sudo]
+cmd = "sudo .pixi/envs/realsense/bin/python tools/apps/realsense_debug.py --rr-config.connect"
+depends-on = ["_realsense-viewer"]
+description = "realsense-debug on macOS: user-owned viewer + sudo'd capture (libusb needs root)"
+
 [tool.pixi.feature.dev.dependencies]
 ruff = "*"
 pytest = ">=8.0.0,<9"
