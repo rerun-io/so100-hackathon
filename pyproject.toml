@@ -24,6 +24,7 @@ tyro = "*"
 pyserial = "*"
 py-opencv = "*"
 pandas = "*"
+rich = "*"
 
 [tool.pixi.target.osx-arm64.dependencies]
 # Camera enumeration in OpenCV's exact index order (to skip the built-in webcam).
