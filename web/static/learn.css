@@ -12,6 +12,8 @@
   --primary-soft: rgba(229, 84, 28, 0.16);
   --action: #2563eb;
   --action-hover: #1d4fd7;
+  --action-soft: rgba(37, 99, 235, 0.07);
+  --action-border: rgba(37, 99, 235, 0.28);
   --radius: 10px;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -114,9 +116,9 @@ th { background: var(--code-bg); }
 .highlight {
   margin: 1.5rem 0 2rem;
   padding: 1rem 1.25rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--action-border);
   border-radius: var(--radius);
-  background: var(--code-bg);
+  background: var(--action-soft);
 }
 .highlight h2 {
   margin: 0 0 0.4rem;
@@ -124,7 +126,7 @@ th { background: var(--code-bg); }
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--action);
 }
 .highlight p { margin: 0; }
 
@@ -157,7 +159,7 @@ th { background: var(--code-bg); }
   height: 520px;
   margin: 1.2rem 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 4px; /* widget shells sit closer to the square controls than prose cards */
   overflow: hidden;
   background: #0d1011;
 }
@@ -210,11 +212,11 @@ th { background: var(--code-bg); }
 .copy-btn {
   font-family: var(--mono);
   font-size: 0.72rem;
-  font-weight: 600;
+  font-weight: 400;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   padding: 0.15rem 0.6rem;
-  border-radius: 999px;
+  border-radius: 2px;
   border: 1px solid #2c353b;
   background: #1d2428;
   color: #cfd6da;
@@ -237,7 +239,7 @@ th { background: var(--code-bg); }
 .setup {
   margin: 1.8rem 0 2.4rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 4px;
   background: var(--bg);
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(15, 23, 30, 0.04);
@@ -275,8 +277,16 @@ th { background: var(--code-bg); }
 }
 .setup-step-title { font-weight: 650; font-size: 0.95rem; letter-spacing: -0.01em; }
 .setup-step-head .setup-badge { font-size: 0.62rem; padding: 0.15rem 0.5rem; }
-.setup-chevron { flex-shrink: 0; color: var(--muted); transition: transform 160ms ease; }
-.setup-step.open .setup-chevron { transform: rotate(90deg); }
+/* The kit chevron points down; collapsed sections rotate it to point right. */
+.setup-chevron {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  transform: rotate(-90deg);
+  transition: transform 160ms ease;
+}
+.setup-step.open .setup-chevron { transform: rotate(0deg); }
 
 /* Blinking dot = this tool is live. Blue: red stays reserved for recording (Collect). */
 .setup-live {
@@ -302,9 +312,10 @@ th { background: var(--code-bg); }
 
 .setup-badge {
   padding: 0.3rem 0.7rem;
-  border-radius: 999px;
+  border-radius: 2px;
+  font-family: var(--mono);
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   background: #e5f4e9;
@@ -355,22 +366,27 @@ th { background: var(--code-bg); }
 .collect {
   margin: 1.2rem 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 4px;
   background: var(--bg);
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(15, 23, 30, 0.04);
 }
 
+/* Tabs live at the top of the side panel (not a full-width header): a hairline under
+   the whole section, the active tab drawing a 2px stroke over it. */
 .collect-tabs {
   display: flex;
   gap: 1.4rem;
-  padding: 0.85rem 1.3rem 0;
+  padding: 1rem 1.1rem 0;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .collect-tab {
-  font: inherit;
-  font-size: 0.92rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
   font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--muted);
   background: none;
   border: none;
@@ -383,47 +399,91 @@ th { background: var(--code-bg); }
 .collect-tab.active { color: var(--fg); border-bottom-color: var(--fg); }
 
 .collect-body { display: flex; align-items: stretch; }
+/* The panel never scrolls: it fills the height the viewer defines, tabs pinned on top. */
 .collect-panel {
+  display: flex;
+  flex-direction: column;
   flex: 0 0 17rem;
   min-width: 0;
   border-right: 1px solid var(--border);
-  overflow-y: auto;
 }
 .panel-record, .panel-live {
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
   padding: 1rem 1.1rem 1.1rem;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 @media (max-width: 860px) {
   .collect-body { flex-direction: column; }
   .collect-panel { flex: none; border-right: none; border-bottom: 1px solid var(--border); }
 }
 
+/* Form fields share the buttons' language: JetBrains Mono, uppercase micro-labels,
+   near-square 2px corners. */
 .panel-field {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  font-size: 0.8rem;
+  gap: 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.7rem;
   font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
   color: var(--subtle);
 }
 .panel-field input[type="text"],
 .panel-field textarea,
 .panel-field select {
-  font: inherit;
-  font-size: 0.9rem;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  line-height: 1.5;
   padding: 0.45rem 0.6rem;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: 2px;
   background: var(--bg);
   color: var(--fg);
   resize: vertical;
 }
+.panel-field input::placeholder,
+.panel-field textarea::placeholder { color: var(--muted); }
+.panel-field input:hover:not(:disabled),
+.panel-field textarea:hover:not(:disabled),
+.panel-field select:hover:not(:disabled) { border-color: var(--fg); }
+.panel-field input:focus,
+.panel-field textarea:focus,
+.panel-field select:focus {
+  outline: none;
+  border-color: var(--action);
+  box-shadow: 0 0 0 3px var(--action-border);
+}
+/* Square flat buttons need an explicit focus ring (UA defaults are barely visible). */
+.collect-btn:focus-visible,
+.save-btn:focus-visible,
+.setup-action:focus-visible,
+.collect-tab:focus-visible,
+.copy-btn:focus-visible,
+.episode-nav button:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: 1px;
+}
+/* Native select arrow replaced by the kit chevron. */
+.panel-field select {
+  appearance: none;
+  padding-right: 1.9rem;
+  background-image: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 16 16' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 6L8 10L12 6' stroke='%234b545a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 14px 14px;
+  cursor: pointer;
+}
 .panel-field input:disabled,
 .panel-field textarea:disabled,
-.panel-field select:disabled { background: var(--code-bg); color: var(--muted); cursor: default; }
+.panel-field select:disabled { background-color: var(--code-bg); color: var(--muted); cursor: default; }
 
 /* One episode at a time: id navigator + its properties, grouped on a grey card. */
 .episode-card {
@@ -432,7 +492,8 @@ th { background: var(--code-bg); }
   gap: 0.7rem;
   padding: 0.8rem 0.85rem;
   background: var(--code-bg);
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
 }
 .episode-card.slide-in { animation: episode-slide 260ms ease; }
 @keyframes episode-slide {
@@ -449,17 +510,20 @@ th { background: var(--code-bg); }
   gap: 0.4rem;
 }
 .episode-nav button {
-  font: inherit;
-  font-size: 1.05rem;
-  line-height: 1;
-  width: 1.5rem;
-  height: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
   border: none;
-  border-radius: 5px;
+  border-radius: 2px;
   background: none;
   color: var(--subtle);
   cursor: pointer;
 }
+.episode-nav button svg { width: 14px; height: 14px; }
+.chev-left { transform: rotate(90deg); }
+.chev-right { transform: rotate(-90deg); }
 .episode-nav button:hover:not(:disabled) { background: var(--border); color: var(--fg); }
 .episode-nav button:disabled { opacity: 0.3; cursor: default; }
 .episode-id {
@@ -473,8 +537,31 @@ th { background: var(--code-bg); }
   text-transform: uppercase;
 }
 /* Episode state: nothing (upcoming), a blinking red dot (recording), a green ✓ (saved). */
-.episode-glyph { display: inline-flex; align-items: center; }
+.episode-glyph { position: relative; display: inline-flex; align-items: center; }
 .episode-glyph.saved { color: #1d7a36; }
+/* Little hover popup on the state glyph (content comes from data-tip). */
+.episode-glyph[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.25rem 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  background: var(--fg);
+  color: #fff;
+  border-radius: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  z-index: 5;
+}
+.episode-glyph[data-tip]:hover::after { opacity: 1; }
 .episode-glyph.rec::after {
   content: "";
   width: 8px;
@@ -515,8 +602,7 @@ th { background: var(--code-bg); }
 
 .live-sub { margin: 0; font-size: 0.85rem; line-height: 1.5; color: var(--subtle); }
 
-.record-hint { display: flex; align-items: center; gap: 0.4rem; }
-.record-hint .collect-link { color: #cfd6da; margin-left: 0; }
+.record-hint { color: #8a949a; }
 
 .collect-btn {
   display: inline-flex;
@@ -555,19 +641,19 @@ th { background: var(--code-bg); }
 .recording .rec-dot::after { animation: rec-blink 1s step-start infinite; }
 @keyframes rec-blink { 50% { opacity: 0; } }
 .stop-square { width: 9px; height: 9px; background: currentColor; flex-shrink: 0; }
+.pause-icon, .play-icon { width: 13px; height: 13px; flex-shrink: 0; }
+/* Paused reads "Resume ..." -- swap pause for play, keeping the button width stable. */
+.play-icon { display: none; }
+.collect-btn.paused .pause-icon { display: none; }
+.collect-btn.paused .play-icon { display: inline; }
 
-.collect-link {
-  margin-left: auto;
-  font: inherit;
-  font-size: 0.82rem;
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--fg);
-  text-decoration: underline;
-  cursor: pointer;
-  white-space: nowrap;
+@media (prefers-reduced-motion: reduce) {
+  .setup-live,
+  .episode-glyph.rec::after,
+  .recording .rec-dot::after { animation: none; }
+  .episode-card.slide-in { animation: none; }
 }
+
 .status-error { color: #c02626; font-size: 0.82rem; padding: 0.4rem 1.3rem 0; }
 .collect-panel .status-error { padding: 0 1.1rem 0.9rem; }
 
@@ -587,3 +673,4 @@ th { background: var(--code-bg); }
   color: #7c868d;
   cursor: pointer;
 }
+.fake-check input { accent-color: var(--action); }

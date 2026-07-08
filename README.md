@@ -109,8 +109,10 @@ pixi run export-lerobot -- --dataset my_task --repo-id <hf-user>/my_task --push 
 
 The first run solves the isolated `export` environment — LeRobot's rerun-sdk pin
 conflicts with the repo's, so `tools/apps/export_lerobot.py` stages episodes from the
-catalog and hands off to `_export_lerobot_writer.py` inside that env. Then train with
-LeRobot as usual (`lerobot-train --policy.type=act --dataset.repo_id=<hf-user>/my_task ...`).
+catalog and hands off to `_export_lerobot_writer.py` inside that env. Camera streams
+export as `observation.images.top` / `.side` in cam-index order (`--camera-names` to
+override). Then LoRA fine-tune MolmoAct2 from `allenai/MolmoAct2-SO100_101` on a GPU
+box — see the course's Train page for the exact commands.
 
 ## Deploy: close the loop
 
@@ -123,8 +125,22 @@ pixi run replay-episode -- --dataset my_task --episode episode_1 --speed 0.5
 
 It ramps gently to the starting pose, plays the trajectory, streams the replayed joints
 to the live proxy, and releases torque when done. Keep a hand near the arm on the first
-run. From here, a trained policy is the same loop with actions computed live — see the
-course's Deploy page.
+run.
+
+Run a trained MolmoAct2 policy the same way — start
+`tools/apps/policy_server_molmoact2.py --checkpoint <hf-user>/molmoact2_my_task` on the
+GPU box, then:
+
+```bash
+pixi run deploy-policy -- --task "pick up the ball" --server http://<gpu-box>:8080/act --dry-run
+pixi run deploy-policy -- --task "pick up the ball" --server http://<gpu-box>:8080/act
+```
+
+`--dry-run` streams predictions to the viewer without motion; live, goals are clamped to
+the calibrated range and `--max-step-deg` per tick. Always dry-run a new checkpoint first.
+Live rollouts are recorded as episodes of `recordings/molmoact2_eval/` (task = the
+`--task` sentence, tag *Needs review*) and registered to the catalog — evaluation runs
+are queryable, comparable, and re-exportable like any other take (`--dataset ""` to skip).
 
 ## Development
 

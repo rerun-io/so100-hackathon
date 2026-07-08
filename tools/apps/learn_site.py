@@ -109,12 +109,9 @@ def load_pages(content_dir: Path = CONTENT_DIR) -> list[Page]:
 
 
 def render_stepper(pages: list[Page], current_order: int) -> str:
-    """The horizontal stepper: one dot per step across the top, done/current/upcoming.
-
-    The first page (the welcome homepage, reached via the site title) is not a step.
-    """
+    """The horizontal stepper: one dot per step across the top, done/current/upcoming."""
     parts = ['<ol class="stepper">']
-    for i, page in enumerate(pages[1:]):
+    for i, page in enumerate(pages):
         state = "done" if page.order < current_order else ("current" if page.order == current_order else "upcoming")
         line = "" if i == 0 else f'<span class="step-line{" filled" if page.order <= current_order else ""}" aria-hidden="true"></span>'
         aria = ' aria-current="page"' if state == "current" else ""
@@ -134,10 +131,7 @@ def _shell(*, title: str, nav_html: str, article_html: str) -> str:
     )
     # Header + stepper share one sticky wrapper so the condensed state (learn2.js)
     # can slide the header away and dock the stepper with a single transform.
-    chrome = (
-        f'<div class="chrome">\n{header}\n'
-        f'<nav class="stepper-nav" aria-label="Course steps">{nav_html}</nav>\n</div>\n<div class="layout">'
-    )
+    chrome = f'<div class="chrome">\n{header}\n<nav class="stepper-nav" aria-label="Course steps">{nav_html}</nav>\n</div>\n<div class="layout">'
     return f"""<!doctype html>
 <html lang="en">
 <head>

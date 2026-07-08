@@ -13,13 +13,19 @@ from typing import Any
 import cv2
 import rerun as rr
 
-# The Mac's internal webcam is never a recording camera on this rig. The device type is
-# authoritative ("...BuiltIn..." on macOS); names are a fallback for older reporting.
+# Cameras that are never recording cameras on this rig: the Mac's internal webcam, and
+# iPhone/iPad Continuity Cameras (macOS auto-adds any signed-in phone that is nearby, so
+# anyone running this with an iPhone would silently record their phone camera).
+# ``isContinuityCamera``/``modelID`` and the "...BuiltIn..." device type are
+# authoritative; names are a fallback for older reporting (a phone's camera is named
+# after the phone, e.g. "Gavrelina Camera", so names alone can't catch it).
 BUILTIN_NAME_HINTS = ("facetime", "built-in", "macbook")
+PHONE_NAME_HINTS = ("iphone", "ipad", "continuity")
 
 
-def _cameras_in_opencv_order() -> list[tuple[str, bool]] | None:
-    """(name, is_builtin) per camera, in OpenCV's index order. None if unavailable.
+def _cameras_in_opencv_order() -> list[tuple[str, str | None]] | None:
+    """(name, skip_reason) per camera, in OpenCV's index order. None if unavailable.
+    ``skip_reason`` is None for regular (usable) cameras.
 
     OpenCV's AVFoundation backend (cap_avfoundation_mac.mm, checked at the installed
     version) enumerates devicesWithMediaType Video + Muxed and then SORTS BY uniqueID —
@@ -36,18 +42,29 @@ def _cameras_in_opencv_order() -> list[tuple[str, bool]] | None:
     devices = list(av.AVCaptureDevice.devicesWithMediaType_(av.AVMediaTypeVideo))  # pyrefly: ignore[missing-attribute]
     devices += list(av.AVCaptureDevice.devicesWithMediaType_(av.AVMediaTypeMuxed))  # pyrefly: ignore[missing-attribute]
     devices.sort(key=lambda device: str(device.uniqueID()))
-    cameras: list[tuple[str, bool]] = []
+    cameras: list[tuple[str, str | None]] = []
     for device in devices:
         name = str(device.localizedName())
-        builtin = "BuiltIn" in str(device.deviceType()) or any(hint in name.lower() for hint in BUILTIN_NAME_HINTS)
-        cameras.append((name, builtin))
+        device_type = str(device.deviceType())
+        lowered = name.lower()
+        # A Continuity Camera reports deviceType "External" (same as USB webcams);
+        # isContinuityCamera is the reliable flag, modelID ("iPhone14,7") the backstop.
+        continuity = bool(device.isContinuityCamera()) if hasattr(device, "isContinuityCamera") else False
+        model = str(device.modelID()).lower()
+        skip: str | None = None
+        if continuity or model.startswith(("iphone", "ipad")) or any(hint in lowered for hint in PHONE_NAME_HINTS):
+            skip = "phone (Continuity Camera)"
+        elif "BuiltIn" in device_type or any(hint in lowered for hint in BUILTIN_NAME_HINTS):
+            skip = "built-in"
+        cameras.append((name, skip))
     return cameras
 
 
-def detect_camera_indices(max_index: int = 4, *, include_builtin: bool = False) -> tuple[int, ...]:
+def detect_camera_indices(max_index: int = 4, *, include_all: bool = False) -> tuple[int, ...]:
     """Probe AVFoundation indices and return the ones that deliver frames, skipping the
-    Mac's built-in webcam. Pass ``include_builtin=True`` (or ``--cameras`` explicitly) to
-    keep it."""
+    Mac's built-in webcam and iPhone/iPad Continuity Cameras. Every detected camera is
+    printed by name, so it's always visible what got picked up. Pass ``include_all=True``
+    (or ``--cameras`` explicitly) to keep the skipped ones."""
     found: list[int] = []
     for index in range(max_index + 1):
         cap = cv2.VideoCapture(index)
@@ -57,14 +74,15 @@ def detect_camera_indices(max_index: int = 4, *, include_builtin: bool = False) 
             found.append(index)
 
     cameras = _cameras_in_opencv_order()
-    if cameras is None or include_builtin:
+    if cameras is None:  # non-macOS: no device metadata to classify with
         return tuple(found)
     kept: list[int] = []
     for index in found:
-        name, builtin = cameras[index] if index < len(cameras) else ("?", False)
-        if builtin:
-            print(f"camera {index} ({name}): built-in, skipping — pass --cameras {index} to use it anyway", flush=True)
+        name, skip = cameras[index] if index < len(cameras) else ("?", None)
+        if skip and not include_all:
+            print(f"camera {index} ({name}): {skip}, skipping — pass --cameras {index} to use it anyway", flush=True)
         else:
+            print(f"camera {index} ({name}): selected", flush=True)
             kept.append(index)
     return tuple(kept)
 
@@ -99,7 +117,7 @@ class CameraSource:
     """
 
     def __init__(self, rec: rr.RecordingStream, jpeg_quality: int = 75) -> None:
-        indices = detect_camera_indices(include_builtin=True)
+        indices = detect_camera_indices(include_all=True)
         self.streamers = [CameraStreamer(index, rec=rec, jpeg_quality=jpeg_quality) for index in indices]
         print(f"data source:        {len(self.streamers)} camera(s) (fake, no arms)", flush=True)
 

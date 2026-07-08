@@ -87,7 +87,9 @@ def _column(df, entity: str, suffix: str) -> str:
     return matches[0]
 
 
-def stage_episode(dataset: rr.catalog.DatasetEntry, episode: Episode, action: str, state: str, cameras: list[str], out_dir: Path) -> int:
+def stage_episode(
+    dataset: rr.catalog.DatasetEntry, episode: Episode, action: str, state: str, cameras: list[str], camera_keys: dict[str, str], out_dir: Path
+) -> int:
     """Query one episode and write action/state arrays + camera JPEGs to out_dir."""
     contents = [action, state, *cameras]
     df = dataset.filter_segments(episode.segment_id).filter_contents(contents).reader(index="time", fill_latest_at=True).to_pandas()
@@ -109,7 +111,7 @@ def stage_episode(dataset: rr.catalog.DatasetEntry, episode: Episode, action: st
     np.save(out_dir / "action.npy", np.stack(list(df[action_col])).astype(np.float32))
     np.save(out_dir / "state.npy", np.stack(list(df[state_col])).astype(np.float32))
     for camera, column in camera_cols.items():
-        cam_dir = out_dir / Path(camera).name
+        cam_dir = out_dir / camera_keys[camera]
         cam_dir.mkdir()
         for index, blob in enumerate(df[column].to_numpy()):
             # The blob column is list-typed: one uint8 array per row, nested one level.
@@ -138,6 +140,11 @@ class Config:
     push: bool = False
     """Upload to the Hugging Face Hub after exporting (private repo)."""
 
+    camera_names: tuple[str, ...] = ("top", "side")
+    """Semantic names for the exported camera streams, in cam-index order (cam0 gets the
+    first name, cam1 the second, ...). MolmoAct2's SO-100/101 checkpoints expect ``top``
+    and ``side`` third-person views; extra cameras keep their camNN names."""
+
     catalog_port: int = 51234
     """so100-server catalog port."""
 
@@ -160,13 +167,15 @@ def main(config: Config) -> None:
     if not episodes:
         raise SystemExit(f"no episodes{f' tagged {config.tag!r}' if config.tag else ''} in dataset '{config.dataset}'")
     action, state, cameras = discover_entities(dataset)
-    print(f"exporting {len(episodes)} episode(s): action={action} state={state} cameras={cameras or 'none'}")
+    camera_keys = {camera: (config.camera_names[i] if i < len(config.camera_names) else Path(camera).name) for i, camera in enumerate(cameras)}
+    camera_summary = ", ".join(f"{Path(camera).name}->{key}" for camera, key in camera_keys.items()) or "none"
+    print(f"exporting {len(episodes)} episode(s): action={action} state={state} cameras={camera_summary}")
 
     with tempfile.TemporaryDirectory(prefix="lerobot-stage-") as stage:
         stage_dir = Path(stage)
         staged = []
         for episode in episodes:
-            frames = stage_episode(dataset, episode, action, state, cameras, stage_dir / episode.segment_id)
+            frames = stage_episode(dataset, episode, action, state, cameras, camera_keys, stage_dir / episode.segment_id)
             if frames == 0:
                 print(f"  {episode.name}: no complete frames, skipped")
                 continue
@@ -183,7 +192,7 @@ def main(config: Config) -> None:
                     "repo_id": config.repo_id,
                     "fps": config.fps,
                     "motor_names": motor_names if dim == len(motor_names) else [f"motor_{i}" for i in range(dim)],
-                    "cameras": [Path(camera).name for camera in cameras],
+                    "cameras": [camera_keys[camera] for camera in cameras],
                     "episodes": staged,
                 }
             )
