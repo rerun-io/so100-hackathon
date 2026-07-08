@@ -9,6 +9,12 @@ body.v2 {
   --primary: #2563eb;
   --primary-soft: rgba(37, 99, 235, 0.16);
 }
+@media (prefers-color-scheme: dark) {
+  body.v2 {
+    --primary: #5a9cf8;
+    --primary-soft: rgba(90, 156, 248, 0.22);
+  }
+}
 
 /* ── Wide layout ────────────────────────────────────────────────────── */
 body.v2 .layout {
@@ -55,7 +61,7 @@ body.v2.is-condensed .chrome:has(.site-header :focus-visible) { transform: trans
 body.v2 .site-header { position: static; }
 body.v2 .stepper-nav {
   position: relative;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--header-bg);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
 }
