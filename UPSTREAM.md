@@ -1,6 +1,6 @@
 # Upstream Rerun wishlist
 
-Friction we hit building this course on Rerun 0.33.1 that can only be fixed (or fixed
+Friction we hit building this course on Rerun 0.34.1 that can only be fixed (or fixed
 properly) in Rerun itself. Each item: what happens today, what we want, and where the
 workaround lives in this repo.
 

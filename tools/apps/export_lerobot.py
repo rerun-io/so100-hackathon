@@ -1,6 +1,6 @@
 """Export a recorded catalog dataset to LeRobot v3 format (the Train step).
 
-Runs in the *default* environment (rerun-sdk 0.33.1) and stages episodes to a temp
+Runs in the *default* environment (rerun-sdk 0.34.1) and stages episodes to a temp
 directory, then spawns ``tools/apps/_export_lerobot_writer.py`` inside the isolated
 ``export`` environment (which has ``lerobot`` -- its rerun-sdk pin conflicts with ours,
 so the two never share an interpreter)::
