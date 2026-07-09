@@ -19,6 +19,14 @@ const PROXY_URL = "rerun+http://localhost:9876/proxy";
 const TAGS = ["Good episode", "Bad episode", "Needs review"];
 const NEW_DATASET = "__new__";
 
+// Mirror of the server's takes.sanitize_name: how a typed dataset name comes back
+// from /datasets once it exists on disk / in the catalog.
+const sanitizeName = (name) =>
+  name
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/^[._]+|[._]+$/g, "");
+
 // ---- control API -----------------------------------------------------------------
 
 async function api(path, body = undefined) {
@@ -69,6 +77,7 @@ function subscribeStatus(subscriber) {
 }
 
 function wireCopy(button, text) {
+  const original = button.innerHTML; // restored after the feedback flash (text or icon)
   button.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(text);
@@ -76,9 +85,15 @@ function wireCopy(button, text) {
     } catch {
       button.textContent = "Copy failed";
     }
-    setTimeout(() => (button.textContent = "Copy"), 1500);
+    setTimeout(() => (button.innerHTML = original), 1500);
   });
 }
+
+// Copy glyph (design kit): stroke follows the surrounding text color, so it adapts to
+// light/dark mode via the button's CSS color.
+const COPY_SVG =
+  '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">' +
+  '<path d="M4.5 8.5V12.5H12.5V4.5H8.5M0.5 0.5H8.5V8.5H0.5V0.5Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 // ---- embedded viewer ---------------------------------------------------------------
 
@@ -127,11 +142,12 @@ function viewerSlot(box) {
   let wanted = null; // recording id the server wants shown
   let synced = null; // last id we successfully switched to
   let followWanted = false; // after switching, jump to the end and press play (live takes)
+  let playWanted = false; // after switching, play from the start (recorded episodes)
   let revealTimer = null;
   let retryTimer = null;
+  let pendingUntil = 0; // while now < this and unsynced, a programmatic switch is in flight
   let bootGen = 0; // bumped by hide()/show(): cancels any in-flight show()
   let queuedFocus = null; // focus() requested while the viewer was still booting
-  const openedUrls = new Set(); // catalog deep links already added as receivers
 
   function trySync() {
     if (!viewer || !wanted) return false;
@@ -143,22 +159,25 @@ function viewerSlot(box) {
         /* viewer still booting or recording not arrived yet; retried by the timer */
       }
     }
-    if (synced === wanted && followWanted) {
-      // "Following mode": the user was reviewing an old take when a new one started.
-      // Jump the cursor to the head of the live take and play, so it keeps following.
+    if (synced === wanted && (followWanted || playWanted)) {
+      // followWanted ("following mode"): the user was reviewing an old take when a new
+      // one started -- jump the cursor to the head of the live take and play, so it
+      // keeps following. playWanted: a recorded episode was focused -- play it from the
+      // start (this also drives the lazy chunk download, so it never sits empty/paused).
       try {
         const timeline = viewer.get_active_timeline(wanted);
         const range = timeline ? viewer.get_time_range(wanted, timeline) : null;
         if (range) {
-          viewer.set_current_time(wanted, timeline, range.max);
+          viewer.set_current_time(wanted, timeline, followWanted ? range.max : range.min);
           viewer.set_playing(wanted, true);
           followWanted = false;
+          playWanted = false;
         }
       } catch {
         /* timeline not ready yet; retried by the timer */
       }
     }
-    return synced === wanted && !followWanted;
+    return synced === wanted && !followWanted && !playWanted;
   }
 
   // Retry until the wanted recording is active (it may still be downloading/streaming),
@@ -166,12 +185,19 @@ function viewerSlot(box) {
   function keepTrying() {
     if (trySync() || retryTimer !== null) return;
     const deadline = Date.now() + 15_000;
+    pendingUntil = deadline;
     retryTimer = setInterval(() => {
       if (trySync() || Date.now() >= deadline) {
         clearInterval(retryTimer);
         retryTimer = null;
       }
     }, 250);
+  }
+
+  // True while a programmatic switch hasn't landed yet -- so viewer->panel sync can tell
+  // "the user clicked another recording" apart from "our own switch is still in flight".
+  function pending() {
+    return wanted !== null && synced !== wanted && Date.now() < pendingUntil;
   }
 
   async function show(proxyUrl) {
@@ -216,19 +242,22 @@ function viewerSlot(box) {
     wanted = null;
     synced = null;
     followWanted = false;
+    playWanted = false;
     queuedFocus = null;
-    openedUrls.clear();
     overlay.hidden = soft;
   }
 
-  function want(recordingId, { follow = false } = {}) {
+  function want(recordingId, { follow = false, play = false, force = false } = {}) {
     if (!recordingId) return;
-    if (wanted !== recordingId) {
+    if (wanted !== recordingId || force) {
       wanted = recordingId;
+      // Re-verify against the viewer even if this id synced before: the user may have
+      // switched the viewer to another recording since (the cache would be stale).
       synced = null;
-      // follow applies on CHANGE only, so callers can pass it on every poll without
-      // re-jumping a stream the user deliberately scrubbed back in.
-      if (follow) followWanted = true;
+      // follow/play apply on CHANGE (or force) only, so callers can pass them on every
+      // poll without re-jumping a stream the user deliberately scrubbed back in.
+      followWanted = follow;
+      playWanted = play && !follow;
     }
     keepTrying();
   }
@@ -237,26 +266,28 @@ function viewerSlot(box) {
   // viewer is already on it -- for explicit "take me to the stream" moments.
   function refollow() {
     if (!wanted) return;
+    synced = null; // the user may have moved the viewer elsewhere: force the switch back
     followWanted = true;
+    playWanted = false;
     keepTrying();
   }
 
-  // Focus a catalog episode: download it once (open is a no-op-cache after that, so
-  // browsing back to an episode is instant), then switch to it as soon as it's loaded.
+  // Focus a catalog episode: switch to it and play it from the start. The deep link is
+  // (re-)opened whenever the recording isn't already loaded -- this also covers sources
+  // the user closed inside the viewer (a local "already opened" cache would go stale).
   function focus(segmentId, url) {
     if (!viewer) {
       queuedFocus = { segmentId, url }; // delivered by show() once the viewer is up
       return;
     }
-    if (url && !openedUrls.has(url)) {
+    want(segmentId, { play: true, force: true });
+    if (url && synced !== segmentId) {
       try {
         viewer.open(url);
-        openedUrls.add(url);
       } catch (error) {
         console.warn("viewer.open failed:", error);
       }
     }
-    want(segmentId);
   }
 
   // The recording the *user* is looking at right now (for panel <- viewer sync).
@@ -268,7 +299,7 @@ function viewerSlot(box) {
     }
   }
 
-  return { show, hide, want, refollow, focus, active };
+  return { show, hide, want, refollow, focus, active, pending };
 }
 
 // One always-on viewer for plain <div data-viewer> embeds (Deploy page), connected to
@@ -366,9 +397,21 @@ function calibrateGuidance(setup) {
   return null;
 }
 
-const CHEVRON_SVG =
-  '<svg class="setup-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
-  ' stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+// Shared inline icons (design kit): a down-pointing chevron (rotated via CSS where
+// needed) and a pause glyph. Stroke follows the surrounding text color.
+const chevronSvg = (cls) =>
+  `<svg class="${cls}" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">` +
+  '<path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const PAUSE_SVG =
+  '<svg class="pause-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<path d="M5.25 2V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '<path d="M10.75 2V14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// Companion play glyph (same stroke language) shown while the stream is paused.
+const PLAY_SVG =
+  '<svg class="play-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+  '<path d="M5.5 3L12 8L5.5 13V3Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+const CHEVRON_SVG = chevronSvg("setup-chevron");
 
 function initSetup(root) {
   const wrap = document.createElement("div");
@@ -569,7 +612,8 @@ function initSetup(root) {
 //                 stream that stays on for the whole arms session (the proxy's memory
 //                 limit flushes its oldest data, so nothing piles up). Recording never
 //                 interrupts it: takes are written to disk invisibly and the viewer
-//                 keeps showing this stream. Connecting/disconnecting the arms lives HERE.
+//                 keeps showing this stream. Pausing/stopping the feed lives HERE (Start
+//                 recording connects the arms itself when no session is up yet).
 //   Recording  -> operate the dataset recorder. A side panel shows ONE episode at a time:
 //                 a fixed, server-assigned id (episode_01 .. episode_NN, never editable,
 //                 never reused) plus its properties (task, tag). The ‹ › arrows browse
@@ -584,12 +628,12 @@ function initCollect(root) {
   const wrap = document.createElement("div");
   wrap.className = "collect";
   wrap.innerHTML = `
-    <div class="collect-tabs">
-      <button type="button" class="collect-tab active" data-tab="live">Livestream</button>
-      <button type="button" class="collect-tab" data-tab="record">Recording</button>
-    </div>
     <div class="collect-body">
       <div class="collect-panel">
+        <div class="collect-tabs" role="tablist">
+          <button type="button" role="tab" aria-selected="true" class="collect-tab active" data-tab="live">Livestream</button>
+          <button type="button" role="tab" aria-selected="false" class="collect-tab" data-tab="record">Recording</button>
+        </div>
         <div class="panel-record">
           <label class="panel-field">Dataset
             <select name="dataset"></select></label>
@@ -597,9 +641,9 @@ function initCollect(root) {
             <input type="text" name="new_dataset" placeholder="my_task"></label>
           <div class="episode-card">
             <div class="episode-nav">
-              <button type="button" name="prev" aria-label="Previous episode" disabled>&lsaquo;</button>
+              <button type="button" name="prev" aria-label="Previous episode" disabled>${chevronSvg("chev-left")}</button>
               <span class="episode-id"><span class="episode-name">episode_01</span><span class="episode-glyph"></span></span>
-              <button type="button" name="fwd" aria-label="Next episode" disabled>&rsaquo;</button>
+              <button type="button" name="fwd" aria-label="Next episode" disabled>${chevronSvg("chev-right")}</button>
             </div>
             <label class="panel-field">Task
               <textarea name="task" rows="3" placeholder="Pick up the ball and place it in the box"></textarea></label>
@@ -619,7 +663,8 @@ function initCollect(root) {
           <p class="live-sub">Operate the robot and watch what it sees in real time, without recording:
             the feed lives only in the viewer's memory (the <b>local</b> source) and nothing is stored.
             Pausing keeps the stream (and teleop) alive &mdash; resuming continues the same feed.</p>
-          <button type="button" class="collect-btn outline" name="pausefeed" disabled>Pause the stream</button>
+          <button type="button" class="collect-btn outline" name="pausefeed" disabled>
+            ${PAUSE_SVG}${PLAY_SVG}<span class="btn-label">Pause the stream</span></button>
           <button type="button" class="collect-btn outline stop-btn" name="stopfeed" disabled>
             <span class="stop-square"></span>Stop the feed</button>
         </div>
@@ -629,8 +674,7 @@ function initCollect(root) {
         <div class="viewer-overlay">
           <button type="button" class="setup-action" name="livestream" disabled hidden>START LIVESTREAM</button>
           <label class="fake-check" hidden><input type="checkbox" name="fake"> no arms plugged in (cameras only)</label>
-          <div class="record-hint" hidden>no live feed &mdash;
-            <button type="button" class="collect-link" name="golive">start it on the Livestream tab</button></div>
+          <div class="record-hint" hidden>no live feed</div>
           <div class="setup-offline"><span class="spinner"></span> waiting for the local data server&hellip;
             <code>pixi run so100-server</code></div>
         </div>
@@ -707,8 +751,23 @@ function initCollect(root) {
     return null; // the upcoming episode has nothing to save yet
   }
 
+  // With "New dataset…" selected, an empty name is a valid state: recording just
+  // creates/uses the default "my_task" dataset (mirrors the input's placeholder).
   function currentDataset() {
     return el("dataset").value === NEW_DATASET ? el("new_dataset").value.trim() || "my_task" : el("dataset").value;
+  }
+
+  // Once a "New dataset…" name exists in the catalog (its first take registered it),
+  // move the dropdown onto it, replacing the free-text field with the normal
+  // selected-dataset state. No-op until the name shows up in /datasets.
+  function adoptNewDataset() {
+    if (el("dataset").value !== NEW_DATASET) return;
+    const name = sanitizeName(el("new_dataset").value.trim() || "my_task");
+    if ([...el("dataset").options].some((option) => option.value === name)) {
+      el("dataset").value = name;
+      el("new_dataset").value = "";
+      q(".new-dataset").hidden = true;
+    }
   }
 
   function showError(message) {
@@ -741,14 +800,17 @@ function initCollect(root) {
     const item = current();
     if (openViewer && item.kind === "saved" && item.segment_id) {
       slot.focus(item.segment_id, item.viewer_url); // focus this episode in the viewer too
+      lastViewerId = item.segment_id; // our own switch: don't mistake it for a user click
     }
     render();
     syncFields(true);
   }
 
   // If the user switches recordings inside the viewer: switching to the live stream
-  // always resumes following mode; switching to an episode moves the panel onto it.
+  // always resumes following mode; switching to an episode plays it and moves the
+  // panel onto it.
   function syncFromViewer() {
+    if (slot.pending()) return; // our own switch is still in flight -- not a user click
     const active = slot.active();
     if (!active || active === lastViewerId) return;
     lastViewerId = active;
@@ -759,7 +821,9 @@ function initCollect(root) {
     }
     if (tab !== "record" || state.running) return;
     const match = episodes.find((entry) => active === entry.segment_id || active.endsWith(`-${entry.stem}`));
-    if (match && match.stem !== current().stem) select(match.stem, { openViewer: false });
+    if (!match) return;
+    slot.want(active, { play: true, force: true }); // a recorded episode always starts playing
+    if (match.stem !== current().stem) select(match.stem, { openViewer: false });
   }
 
   function render() {
@@ -770,7 +834,10 @@ function initCollect(root) {
     const index = list.findIndex((entry) => entry.stem === item.stem);
 
     // Tabs.
-    for (const button of wrap.querySelectorAll(".collect-tab")) button.classList.toggle("active", button.dataset.tab === tab);
+    for (const button of wrap.querySelectorAll(".collect-tab")) {
+      button.classList.toggle("active", button.dataset.tab === tab);
+      button.setAttribute("aria-selected", String(button.dataset.tab === tab));
+    }
     q(".panel-record").hidden = tab !== "record";
     q(".panel-live").hidden = tab !== "live";
 
@@ -784,7 +851,8 @@ function initCollect(root) {
     // Livestream tab. Pause drops frames server-side but keeps the same recording id,
     // so Resume continues the SAME stream; both are locked while a take is recording.
     el("pausefeed").disabled = busy || !connected || running;
-    el("pausefeed").textContent = state.live_paused ? "Resume the stream" : "Pause the stream";
+    el("pausefeed").querySelector(".btn-label").textContent = state.live_paused ? "Resume the stream" : "Pause the stream";
+    el("pausefeed").classList.toggle("paused", Boolean(state.live_paused));
     el("stopfeed").disabled = busy || !connected || running;
 
     // Episode navigator.
@@ -793,6 +861,15 @@ function initCollect(root) {
     epName.textContent = item.episode;
     glyph.className = `episode-glyph${item.kind === "saved" ? " saved" : ""}${item.kind === "recording" ? " rec" : ""}`;
     glyph.textContent = item.kind === "saved" ? "\u2713" : "";
+    // State glyph gets a hover popup (styled via [data-tip]) + a text alternative.
+    const glyphState = item.kind === "recording" ? "recording" : item.kind === "saved" ? "recorded episode" : "";
+    if (glyphState) {
+      glyph.setAttribute("data-tip", glyphState);
+      glyph.setAttribute("aria-label", glyphState);
+    } else {
+      glyph.removeAttribute("data-tip");
+      glyph.removeAttribute("aria-label");
+    }
 
     // Properties + explicit save (dirty-tracked against what the server has).
     const baseline = baselineFor(item);
@@ -818,7 +895,8 @@ function initCollect(root) {
     const record = el("record");
     record.classList.toggle("recording", running);
     record.querySelector(".btn-label").textContent = running ? "Recording..." : episodes.length > 0 ? "Start new recording" : "Start recording";
-    record.disabled = busy || !connected || running;
+    // Recording implies streaming: enabled without a live session (the click starts one).
+    record.disabled = busy || !online || running;
     el("stoprec").disabled = busy || !running;
 
     // The proxy lives as long as the arms session: the port only changes on
@@ -852,15 +930,25 @@ function initCollect(root) {
     q(".new-dataset").hidden = select.value !== NEW_DATASET;
   }
 
+  let episodesGen = 0; // drops out-of-order responses when the dataset switches mid-fetch
   async function refreshEpisodes() {
-    try {
-      const data = await api(`/episodes?dataset=${encodeURIComponent(currentDataset())}`);
-      if (Array.isArray(data.episodes)) {
-        episodes = data.episodes;
-        nextId = data.next || nextId;
+    const gen = ++episodesGen;
+    if (el("dataset").value === NEW_DATASET && !el("new_dataset").value.trim()) {
+      // A dataset that doesn't exist yet: no episodes, and the first take is episode_01
+      // (never the previous dataset's numbering).
+      episodes = [];
+      nextId = "episode_01";
+    } else {
+      try {
+        const data = await api(`/episodes?dataset=${encodeURIComponent(currentDataset())}`);
+        if (gen !== episodesGen) return; // a newer dataset selection took over
+        if (Array.isArray(data.episodes)) {
+          episodes = data.episodes;
+          nextId = data.next || "episode_01";
+        }
+      } catch {
+        /* server briefly down; the poll will retry */
       }
-    } catch {
-      /* server briefly down; the poll will retry */
     }
     render();
     syncFields(false);
@@ -912,22 +1000,21 @@ function initCollect(root) {
       syncFields(true);
     });
   }
-  el("golive").addEventListener("click", () => {
-    tab = "live";
-    if (state.recording_id) {
-      slot.want(state.recording_id);
-      slot.refollow();
-    }
-    render();
-  });
-
   el("dataset").addEventListener("change", () => {
     q(".new-dataset").hidden = el("dataset").value !== NEW_DATASET;
     drafts.clear();
     selected = null;
     savedFlash = null;
     noteText = null;
+    episodes = []; // never show the previous dataset's episodes while the fetch runs
+    nextId = "episode_01";
     refreshEpisodes();
+  });
+  // Keep the episode number live while the name is typed ("change" only fires on blur).
+  let newNameTimer = null;
+  el("new_dataset").addEventListener("input", () => {
+    clearTimeout(newNameTimer);
+    newNameTimer = setTimeout(refreshEpisodes, 300);
   });
   el("new_dataset").addEventListener("change", refreshEpisodes);
 
@@ -977,6 +1064,11 @@ function initCollect(root) {
     // the baseline (stamped on /stop).
     const upcoming = items().at(-1);
     const draft = draftFor(upcoming);
+    // No live session yet? Recording implies streaming -- connect the arms first.
+    if (state.arms === "disconnected") {
+      const session = await call("/arms/connect", { fake: el("fake").checked });
+      if (!session || session.error) return;
+    }
     const next = await call("/start", { dataset: currentDataset(), task: draft.task.trim() });
     if (!next || next.error || !next.running) return;
     const stem = String(next.last?.stem ?? next.last?.episode ?? upcoming.stem);
@@ -984,7 +1076,8 @@ function initCollect(root) {
     drafts.delete(NEXT_KEY);
     savedFlash = null;
     noteText = null;
-    await refreshDatasets(); // a brand-new dataset name becomes selectable
+    await refreshDatasets(); // an existing dataset typed under "New dataset…" is selectable now
+    adoptNewDataset();
     select(stem); // slide the card to the fresh take (red dot)
     // Back to the stream, in following mode -- even if the viewer was already on it
     // (a fresh take should always be seen from its head).
@@ -1004,6 +1097,10 @@ function initCollect(root) {
     if (next.last?.status === "register_failed") showError(String(next.last.error ?? "registration failed"));
     const stem = String(next.last?.stem ?? take.stem);
     recordingBaseline = null;
+    // A first-ever take registers its dataset in the catalog: only NOW does a brand-new
+    // name (or the default "my_task") appear in /datasets, so adopt it here.
+    await refreshDatasets();
+    adoptNewDataset();
     await refreshEpisodes(); // the fresh take shows up as a saved episode
     noteText = { stem, text: "recording has been saved to the catalog" };
     savedFlash = null;
@@ -1041,6 +1138,25 @@ function initCollect(root) {
 }
 
 // ---- boot --------------------------------------------------------------------------
+
+// Every fenced code block gets a hover Copy button (same wiring as the overlay's
+// command). The <pre> is wrapped so the button doesn't scroll with wide code.
+for (const pre of document.querySelectorAll("pre")) {
+  const code = pre.querySelector("code");
+  if (!code) continue;
+  const wrapper = document.createElement("div");
+  wrapper.className = "pre-wrap";
+  pre.replaceWith(wrapper);
+  wrapper.append(pre);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-btn pre-copy";
+  button.title = "Copy code";
+  button.setAttribute("aria-label", "Copy code");
+  button.innerHTML = COPY_SVG;
+  wireCopy(button, code.textContent.replace(/\n$/, ""));
+  wrapper.append(button);
+}
 
 document.querySelectorAll("[data-viewer]").forEach(initViewer);
 document.querySelectorAll("[data-collect]").forEach(initCollect);

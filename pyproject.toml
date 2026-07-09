@@ -32,12 +32,9 @@ pyobjc-framework-avfoundation = "*"
 
 [tool.pixi.pypi-dependencies]
 so100_hackathon = { path = ".", editable = true }
-# Pinned back to 0.33.1: the 0.34 web viewer cannot talk grpc-web to `rr.server.Server`
-# (tonic-web-wasm-client 0.8.0 drops the grpc-status trailer; strict tonic 0.14 rejects
-# the stream). Restore 0.34 once RR-5147 ships in a release.
-rerun-sdk = "==0.33.1"
+rerun-sdk = "==0.34.1"
 feetech-servo-sdk = ">=1.0.0"
-datafusion = ">=52,<53"  # rerun-sdk 0.33 requires datafusion major 52
+datafusion = ">=53,<54"  # rerun-sdk 0.34 requires datafusion major 53
 markdown = ">=3.6"
 
 # LeRobot pins an older rerun-sdk which conflicts with ours, so the export env is fully
@@ -119,13 +116,21 @@ description = "Query the local catalog: list datasets, per-episode metadata tabl
 cmd = "python tools/apps/replay_episode.py"
 description = "Replay a recorded episode's action trajectory on the follower arm (--speed 0.5 for half speed)"
 
+[tool.pixi.tasks.deploy-policy]
+cmd = "python tools/apps/deploy_policy.py"
+description = "Run a trained MolmoAct2 policy on the follower arm via an inference server (--dry-run to watch predictions without motion)"
+
 [tool.pixi.tasks.log-so100]
 cmd = "python tools/apps/log_so100.py"
 description = "Stream live SO-100 arm telemetry into a Rerun viewer"
 
 [tool.pixi.tasks.calibrate-so100]
 cmd = "python tools/apps/calibrate_so100.py"
-description = "Guided SO-100 calibration (match target poses shown in the viewer)"
+description = "Guided SO-100 calibration (match target poses shown in the viewer); also dual-writes the calibration in LeRobot's format for newt-starter/lerobot tools"
+
+[tool.pixi.tasks.export-calibration]
+cmd = "python tools/apps/export_calibration.py"
+description = "Re-export an arm's calibration in LeRobot's format into the HF cache (calibrate-so100 already does this automatically; arm must be plugged in)"
 
 [tool.pixi.tasks.teleop-so100]
 cmd = "python tools/apps/log_so100.py --teleop --fps 60"

@@ -4,10 +4,16 @@
    - viewers get much more vertical space
    - the collect card puts the fields in a vertical column next to a big viewer */
 
-/* ── Accent color: v2 is blue, not rerun-orange ─────────────────────── */
+/* ── Accent color: v2 is blue, not rerun-orange (same blue as --action) ── */
 body.v2 {
-  --primary: #186add;
-  --primary-soft: rgba(24, 106, 221, 0.16);
+  --primary: #2563eb;
+  --primary-soft: rgba(37, 99, 235, 0.16);
+}
+@media (prefers-color-scheme: dark) {
+  body.v2 {
+    --primary: #5a9cf8;
+    --primary-soft: rgba(90, 156, 248, 0.22);
+  }
 }
 
 /* ── Wide layout ────────────────────────────────────────────────────── */
@@ -55,7 +61,7 @@ body.v2.is-condensed .chrome:has(.site-header :focus-visible) { transform: trans
 body.v2 .site-header { position: static; }
 body.v2 .stepper-nav {
   position: relative;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--header-bg);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
 }
@@ -165,7 +171,7 @@ body.v2.is-condensed .step[data-state="current"] .step-dot::after { width: 5px; 
 body.v2 .viewer-box { height: 70vh; }
 
 /* ── Collect + Setup cards: panel + viewer layouts; just grow the viewer ── */
-/* The viewer sets the row height; the panel stretches and scrolls internally. */
+/* The viewer sets the row height; the panels stretch to fill it (setup scrolls internally). */
 body.v2 .collect .viewer-box,
 body.v2 .setup .viewer-box {
   height: auto;

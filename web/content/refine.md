@@ -1,6 +1,6 @@
 ---
 title: "Refine: enrich, query, curate"
-order: 4 
+order: 3
 ---
 
 Everything you just recorded is queryable right now, through the catalog served by
