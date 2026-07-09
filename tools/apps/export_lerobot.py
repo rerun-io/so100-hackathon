@@ -11,6 +11,17 @@ so the two never share an interpreter)::
 Only episodes tagged "Good episode" are exported by default (``--tag ""`` for all).
 Output lands in ``datasets/<repo-id>/``; ``--push`` uploads to the Hugging Face Hub
 (login first with ``pixi run -e export hf auth login``).
+
+Units note (important for training): recordings store joints in OUR calibrated degrees
+(middle pose = 0 deg), but the SO-100/101 training ecosystem — the pooled community data,
+the ``allenai/MolmoAct2-SO100_101`` base checkpoint, and deployment clients built on
+lerobot's ``SO101Follower`` with its default ``use_degrees=False`` (e.g. the
+newt-starter-so101) — exchanges joints in lerobot's NORMALIZED units: each arm joint's
+calibrated range mapped to [-100, 100], gripper [0, 100]. A model fine-tuned on degrees
+would command values a lerobot-driven arm misreads as +-100 units -> wrong poses. So by
+default the export converts degrees -> +-100 using the follower's calibration
+(``calibrations/<usb_id>.json``, the same ranges dual-written for those clients);
+``--units degrees`` keeps raw degrees for stacks that expect them.
 """
 
 from __future__ import annotations
@@ -22,7 +33,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import tyro
@@ -31,7 +42,7 @@ os.environ.setdefault("RERUN_INSECURE_SKIP_HOST_CHECK", "1")
 
 import rerun as rr  # noqa: E402 - the env var above must be set before use
 
-from so100_hackathon.calibration import DEFAULT_MOTOR_NAMES  # noqa: E402
+from so100_hackathon.calibration import DEFAULT_MOTOR_NAMES, load_arm_kind, load_arm_ranges, load_calibration  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -80,6 +91,49 @@ def discover_entities(dataset: rr.catalog.DatasetEntry) -> tuple[str, str, list[
     return action, state, cameras
 
 
+class LerobotNormalizer:
+    """Convert our calibrated units (degrees, gripper %) to lerobot's normalized wire units.
+
+    Per DEGREE joint: degrees -> raw ticks (inverse of our calibration mapping) -> the
+    joint's swept [range_min, range_max] mapped linearly to [-100, 100]. That is exactly
+    what lerobot's ``MotorNormMode.RANGE_M100_100`` does at read time, so a model trained
+    on these values speaks the same language as an arm driven through ``SO101Follower``.
+    LINEAR joints (the gripper) pass through: our 0-100% over the swept range IS
+    lerobot's ``RANGE_0_100``.
+    """
+
+    def __init__(self, calibration_path: Path) -> None:
+        self.path = calibration_path
+        self.calibration = load_calibration(calibration_path)
+        ranges = load_arm_ranges(calibration_path)
+        if ranges is None:
+            raise SystemExit(f"{calibration_path} has no range-of-motion sweep (too old?) -- re-run `pixi run calibrate-so100 follower`")
+        self.range_min, self.range_max = ranges
+
+    def __call__(self, values: np.ndarray) -> np.ndarray:
+        if values.shape[1] != len(self.calibration):
+            raise SystemExit(f"cannot normalize: {values.shape[1]} joints in the recording vs {len(self.calibration)} in {self.path}")
+        out = np.empty_like(values)
+        for i, calib in enumerate(self.calibration):
+            if calib.calib_mode == "LINEAR":
+                out[:, i] = values[:, i]
+                continue
+            raw = values[:, i] / 180.0 * float(calib.end_pos - calib.start_pos) + float(calib.start_pos)
+            out[:, i] = (raw - float(self.range_min[i])) / float(self.range_max[i] - self.range_min[i]) * 200.0 - 100.0
+        return out
+
+
+def find_follower_calibration(calibration_dir: Path) -> Path:
+    followers = sorted(path for path in calibration_dir.glob("*.json") if load_arm_kind(path) == "follower")
+    if not followers:
+        raise SystemExit(f"no follower calibration in {calibration_dir}/ -- run `pixi run calibrate-so100 follower`, or export with --units degrees")
+    if len(followers) > 1:
+        raise SystemExit(
+            f"several follower calibrations in {calibration_dir}/ ({', '.join(p.name for p in followers)}) -- pick one with --calibration"
+        )
+    return followers[0]
+
+
 def _column(df, entity: str, suffix: str) -> str:
     matches = [name for name in df.columns if name.endswith(suffix) and entity in name]
     if not matches:
@@ -88,7 +142,14 @@ def _column(df, entity: str, suffix: str) -> str:
 
 
 def stage_episode(
-    dataset: rr.catalog.DatasetEntry, episode: Episode, action: str, state: str, cameras: list[str], camera_keys: dict[str, str], out_dir: Path
+    dataset: rr.catalog.DatasetEntry,
+    episode: Episode,
+    action: str,
+    state: str,
+    cameras: list[str],
+    camera_keys: dict[str, str],
+    normalize: LerobotNormalizer | None,
+    out_dir: Path,
 ) -> int:
     """Query one episode and write action/state arrays + camera JPEGs to out_dir."""
     contents = [action, state, *cameras]
@@ -108,8 +169,12 @@ def stage_episode(
         return 0
 
     out_dir.mkdir(parents=True)
-    np.save(out_dir / "action.npy", np.stack(list(df[action_col])).astype(np.float32))
-    np.save(out_dir / "state.npy", np.stack(list(df[state_col])).astype(np.float32))
+    action_values = np.stack(list(df[action_col])).astype(np.float32)
+    state_values = np.stack(list(df[state_col])).astype(np.float32)
+    if normalize is not None:  # degrees -> lerobot +-100 wire units (see module docstring)
+        action_values, state_values = normalize(action_values), normalize(state_values)
+    np.save(out_dir / "action.npy", action_values)
+    np.save(out_dir / "state.npy", state_values)
     for camera, column in camera_cols.items():
         cam_dir = out_dir / camera_keys[camera]
         cam_dir.mkdir()
@@ -145,6 +210,20 @@ class Config:
     first name, cam1 the second, ...). MolmoAct2's SO-100/101 checkpoints expect ``top``
     and ``side`` third-person views; extra cameras keep their camNN names."""
 
+    units: Literal["lerobot", "degrees"] = "lerobot"
+    """Joint units written to the dataset. ``lerobot`` (default) converts our calibrated
+    degrees to lerobot's normalized wire units (arm joints [-100, 100] over the calibrated
+    range, gripper [0, 100]) — the convention of the pooled SO-100/101 community data, the
+    MolmoAct2-SO100_101 base checkpoint, and lerobot-driven deploy clients. ``degrees``
+    exports raw calibrated degrees unchanged."""
+
+    calibration: Path | None = None
+    """Calibration JSON of the follower arm the episodes were recorded with (needed for
+    the degrees -> +-100 conversion). Default: the single follower calibration found in
+    ``--calibration-dir``."""
+
+    calibration_dir: Path = Path("calibrations")
+
     catalog_port: int = 51234
     """so100-server catalog port."""
 
@@ -169,13 +248,19 @@ def main(config: Config) -> None:
     action, state, cameras = discover_entities(dataset)
     camera_keys = {camera: (config.camera_names[i] if i < len(config.camera_names) else Path(camera).name) for i, camera in enumerate(cameras)}
     camera_summary = ", ".join(f"{Path(camera).name}->{key}" for camera, key in camera_keys.items()) or "none"
+    normalize = None
+    if config.units == "lerobot":
+        normalize = LerobotNormalizer(config.calibration or find_follower_calibration(config.calibration_dir))
+        print(f"units: degrees -> lerobot +-100 (calibration: {normalize.path})")
+    else:
+        print("units: calibrated degrees (unconverted — NOT the lerobot/MolmoAct2-SO100_101 wire convention)")
     print(f"exporting {len(episodes)} episode(s): action={action} state={state} cameras={camera_summary}")
 
     with tempfile.TemporaryDirectory(prefix="lerobot-stage-") as stage:
         stage_dir = Path(stage)
         staged = []
         for episode in episodes:
-            frames = stage_episode(dataset, episode, action, state, cameras, camera_keys, stage_dir / episode.segment_id)
+            frames = stage_episode(dataset, episode, action, state, cameras, camera_keys, normalize, stage_dir / episode.segment_id)
             if frames == 0:
                 print(f"  {episode.name}: no complete frames, skipped")
                 continue

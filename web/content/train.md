@@ -24,8 +24,8 @@ The mapping out of your recordings:
 
 | LeRobot | from the recording |
 | --- | --- |
-| `observation.state` | the follower's calibrated joint positions (`.../position`) |
-| `action` | the goals the leader commanded (`.../goal`) |
+| `observation.state` | the follower's joint positions (`.../position`), converted to LeRobot's normalized units (arm ±100 over the calibrated range, gripper 0–100 — the convention the SO-100/101 checkpoints train in; `--units degrees` to skip) |
+| `action` | the goals the leader commanded (`.../goal`), same units |
 | `task` | the task you typed when recording |
 | `observation.images.top` / `.side` | one video stream per `camera/cam*`, renamed in cam-index order (`--camera-names` to override) |
 

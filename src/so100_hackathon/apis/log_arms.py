@@ -16,6 +16,7 @@ type-checks ``main`` and the config when running under the dev environment.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from dataclasses import dataclass, field
@@ -200,6 +201,19 @@ def _open_arms(config: LogArmsConfig, rec: rr.RecordingStream) -> list[Arm]:
     return arms
 
 
+def _log_first_pose(arms: list[Arm], rec: rr.RecordingStream) -> None:
+    """Log one frame of real joint positions right after opening the arms.
+
+    The URDF meshes are logged statically when the arms open, but they render as a
+    disassembled pile until the first joint transforms arrive — and camera probing
+    (seconds) sits between the two. One immediate read closes that gap.
+    """
+    rec.set_time("time", timestamp=time.time())
+    for arm in arms:
+        with contextlib.suppress(RuntimeError):  # transient bus glitch; the main loop will retry and report
+            _log_arm(arm, rec)
+
+
 def _log_arm(arm: Arm, rec: FrameSink) -> None:
     telemetry: list[MotorTelemetry] = arm.bus.read_telemetry()
     calibrated = [calib.calibrated_from_raw(t.position_raw) for calib, t in zip(arm.calibration, telemetry, strict=True)]
@@ -258,6 +272,10 @@ class ArmSession:
         self.config = config
         self.rec: FrameSink = rec
         self.arms = _open_arms(config, rec)
+        _log_first_pose(self.arms, rec)
+        # Send the real layout (sans cameras) before the slow camera probe — otherwise
+        # any attached viewer falls back to its heuristic blueprint for those seconds.
+        rec.send_blueprint(self.blueprint(camera_paths=[]), make_active=True)
         camera_indices = detect_camera_indices() if config.cameras is None else config.cameras
         self.streamers = [CameraStreamer(index, rec=rec, jpeg_quality=config.jpeg_quality) for index in camera_indices]
         self._reconnect_every = max(1, int(config.fps))  # attempt a reconnect roughly once a second
@@ -334,12 +352,12 @@ class ArmSession:
             rec.log(f"{self._follower.name}/goal", rr.SeriesLines(names=goal_names), static=True)
         rec.send_blueprint(self.blueprint(), make_active=True)
 
-    def blueprint(self) -> rrb.Blueprint:
+    def blueprint(self, camera_paths: list[str] | None = None) -> rrb.Blueprint:
         """This session's viewer layout (also saved as the catalog datasets' default blueprint)."""
         return create_blueprint(
             [arm.name for arm in self.arms],
             leader_name=next((arm.name for arm in self.arms if arm.is_leader), None),
-            camera_paths=[streamer.entity_path for streamer in self.streamers],
+            camera_paths=[streamer.entity_path for streamer in self.streamers] if camera_paths is None else camera_paths,
             visual_paths=[arm.urdf.visual_geometries_path for arm in self.arms if arm.urdf is not None],
             show_urdf=self.config.urdf,
             window_seconds=self.config.window_seconds,
@@ -412,6 +430,7 @@ def main(config: LogArmsConfig) -> None:
     rec = config.rr_config.rec
     rec.send_recording_name("Teleop" if config.teleop else "Ping test")
     arms = _open_arms(config, rec)
+    _log_first_pose(arms, rec)
 
     # Name the per-motor series once, statically, so plot legends show joint names.
     for arm in arms:
@@ -436,22 +455,27 @@ def main(config: LogArmsConfig) -> None:
         goal_names = [f"{calib.motor_name} goal" for calib in follower_arm.calibration]
         rec.log(f"{follower_arm.name}/goal", rr.SeriesLines(names=goal_names), static=True)
 
+    def send_blueprint(camera_paths: list[str]) -> None:
+        rec.send_blueprint(
+            create_blueprint(
+                [arm.name for arm in arms],
+                leader_name=next((arm.name for arm in arms if arm.is_leader), None),
+                camera_paths=camera_paths,
+                visual_paths=[arm.urdf.visual_geometries_path for arm in arms if arm.urdf is not None],
+                show_urdf=config.urdf,
+                window_seconds=config.window_seconds,
+            ),
+            make_active=True,
+        )
+
+    # Send the real layout (sans cameras) before the slow camera probe — otherwise the
+    # viewer falls back to its heuristic blueprint for those seconds.
+    send_blueprint([])
     camera_indices = detect_camera_indices() if config.cameras is None else config.cameras
     streamers = [CameraStreamer(index, rec=rec, jpeg_quality=config.jpeg_quality) for index in camera_indices]
     for streamer in streamers:
         streamer.start()
-
-    rec.send_blueprint(
-        create_blueprint(
-            [arm.name for arm in arms],
-            leader_name=next((arm.name for arm in arms if arm.is_leader), None),
-            camera_paths=[streamer.entity_path for streamer in streamers],
-            visual_paths=[arm.urdf.visual_geometries_path for arm in arms if arm.urdf is not None],
-            show_urdf=config.urdf,
-            window_seconds=config.window_seconds,
-        ),
-        make_active=True,
-    )
+    send_blueprint([streamer.entity_path for streamer in streamers])
 
     frame_time = 1.0 / config.fps
     deadline: float | None = None if config.seconds is None else time.monotonic() + config.seconds

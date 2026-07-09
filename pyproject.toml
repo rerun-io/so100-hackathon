@@ -125,7 +125,11 @@ description = "Stream live SO-100 arm telemetry into a Rerun viewer"
 
 [tool.pixi.tasks.calibrate-so100]
 cmd = "python tools/apps/calibrate_so100.py"
-description = "Guided SO-100 calibration (match target poses shown in the viewer)"
+description = "Guided SO-100 calibration (match target poses shown in the viewer); also dual-writes the calibration in LeRobot's format for newt-starter/lerobot tools"
+
+[tool.pixi.tasks.export-calibration]
+cmd = "python tools/apps/export_calibration.py"
+description = "Re-export an arm's calibration in LeRobot's format into the HF cache (calibrate-so100 already does this automatically; arm must be plugged in)"
 
 [tool.pixi.tasks.teleop-so100]
 cmd = "python tools/apps/log_so100.py --teleop --fps 60"

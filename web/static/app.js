@@ -77,6 +77,7 @@ function subscribeStatus(subscriber) {
 }
 
 function wireCopy(button, text) {
+  const original = button.innerHTML; // restored after the feedback flash (text or icon)
   button.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(text);
@@ -84,9 +85,15 @@ function wireCopy(button, text) {
     } catch {
       button.textContent = "Copy failed";
     }
-    setTimeout(() => (button.textContent = "Copy"), 1500);
+    setTimeout(() => (button.innerHTML = original), 1500);
   });
 }
+
+// Copy glyph (design kit): stroke follows the surrounding text color, so it adapts to
+// light/dark mode via the button's CSS color.
+const COPY_SVG =
+  '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">' +
+  '<path d="M4.5 8.5V12.5H12.5V4.5H8.5M0.5 0.5H8.5V8.5H0.5V0.5Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 // ---- embedded viewer ---------------------------------------------------------------
 
@@ -1131,6 +1138,25 @@ function initCollect(root) {
 }
 
 // ---- boot --------------------------------------------------------------------------
+
+// Every fenced code block gets a hover Copy button (same wiring as the overlay's
+// command). The <pre> is wrapped so the button doesn't scroll with wide code.
+for (const pre of document.querySelectorAll("pre")) {
+  const code = pre.querySelector("code");
+  if (!code) continue;
+  const wrapper = document.createElement("div");
+  wrapper.className = "pre-wrap";
+  pre.replaceWith(wrapper);
+  wrapper.append(pre);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-btn pre-copy";
+  button.title = "Copy code";
+  button.setAttribute("aria-label", "Copy code");
+  button.innerHTML = COPY_SVG;
+  wireCopy(button, code.textContent.replace(/\n$/, ""));
+  wrapper.append(button);
+}
 
 document.querySelectorAll("[data-viewer]").forEach(initViewer);
 document.querySelectorAll("[data-collect]").forEach(initCollect);

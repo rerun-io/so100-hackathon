@@ -9,6 +9,7 @@ still works out of the box.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -119,6 +120,58 @@ def save_calibration(
         payload["range_max"] = range_max
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def lerobot_calibration_path(kind: str, name: str) -> Path:
+    """Where LeRobot-ecosystem tools (``lerobot-calibrate`` consumers, e.g. the
+    newt-starter-so101 deployment client) look up this arm's calibration.
+
+    Mirrors lerobot's constants: ``$HF_LEROBOT_CALIBRATION``, else
+    ``$HF_LEROBOT_HOME/calibration``, else ``~/.cache/huggingface/lerobot/calibration``.
+    Followers live under ``robots/so101_follower/<name>.json``, leaders under
+    ``teleoperators/so101_leader/<name>.json``; ``<name>`` is the ``--robot.id`` those
+    tools are launched with (we use the arm's USB id).
+    """
+    hf_home = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
+    lerobot_home = Path(os.environ.get("HF_LEROBOT_HOME", str(hf_home / "lerobot")))
+    calibration_root = Path(os.environ.get("HF_LEROBOT_CALIBRATION", str(lerobot_home / "calibration")))
+    group, device = ("robots", "so101_follower") if kind == "follower" else ("teleoperators", "so101_leader")
+    return calibration_root / group / device / f"{name}.json"
+
+
+def save_lerobot_calibration(
+    path: Path,
+    motor_names: tuple[str, ...],
+    motor_ids: tuple[int, ...],
+    homing_offsets: list[int],
+    range_min: list[int],
+    range_max: list[int],
+) -> None:
+    """The SAME calibration, re-expressed in LeRobot v3's on-disk schema (one object per
+    motor: ``id``/``drive_mode``/``homing_offset``/``range_min``/``range_max``).
+
+    Written so an arm calibrated by ``calibrate-so100`` needs NO second
+    ``lerobot-calibrate`` sweep to be driven by LeRobot-ecosystem tools — train-time and
+    inference-time joint angles then mean the same physical pose, because both sides use
+    identical homing offsets and ranges.
+
+    ``homing_offsets`` must be the values ACTUALLY in the servos' EEPROM (read back, not
+    assumed): LeRobot's connect-time ``is_calibrated`` check compares this file against
+    the servo registers, and on mismatch writes the file's values INTO the servos —
+    a wrong file here would silently destroy the calibration.
+    """
+    payload = {
+        name: {
+            "id": motor_id,
+            "drive_mode": 0,  # standard assembly convention, same as our DRIVE_SIGNS all-positive
+            "homing_offset": offset,
+            "range_min": lo,
+            "range_max": hi,
+        }
+        for name, motor_id, offset, lo, hi in zip(motor_names, motor_ids, homing_offsets, range_min, range_max, strict=True)
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=4) + "\n")
 
 
 def fallback_calibration() -> list[MotorCalibration]:

@@ -41,6 +41,16 @@ Enter), then **sweep every joint** through its range (Enter). It writes
 flags. Teleop clamps follower goals to the swept range, glides to the leader's pose on
 start instead of jumping, and always releases torque on exit.
 
+The same calibration is **dual-written in LeRobot's format** into the HF cache
+(`~/.cache/huggingface/lerobot/calibration/robots/so101_follower/<USB_ID>.json`), so
+LeRobot-ecosystem tools — including the `newt-starter-so101` deployment client — drive
+the arm with exactly the calibration your datasets were recorded with (launch them with
+`--robot.id=<USB_ID>`; no second `lerobot-calibrate` sweep). This matters because
+calibration defines what "42°" means physically: if train-time and inference-time
+calibrations differ, a trained policy commands the wrong poses. For arms calibrated
+before dual-write existed, `pixi run export-calibration -- follower` emits the file
+(arm plugged in — the homing offsets are read back from the servos' EEPROM).
+
 Logged per arm: `<arm>/position` (calibrated degrees; gripper 0-100%), raw servo
 telemetry (`position_raw`, `speed`, `load`, `current`, `voltage`, `temperature`), the
 animated URDF, `camera/cam<N>` JPEG frames — plus `<follower>/goal` (the commanded pose,
@@ -113,6 +123,14 @@ catalog and hands off to `_export_lerobot_writer.py` inside that env. Camera str
 export as `observation.images.top` / `.side` in cam-index order (`--camera-names` to
 override). Then LoRA fine-tune MolmoAct2 from `allenai/MolmoAct2-SO100_101` on a GPU
 box — see the course's Train page for the exact commands.
+
+Joint units are converted on export: recordings are in calibrated degrees, but the
+dataset is written in **LeRobot's normalized wire units** (arm joints [-100, 100] over
+each joint's calibrated range, gripper [0, 100]) using the follower's calibration —
+that's the convention of the pooled SO-100/101 community data, the base checkpoint, and
+any deploy client built on lerobot's `SO101Follower` (like the New Theory starter). Skip
+the conversion with `--units degrees` if your training stack expects degrees; mixing the
+two silently produces a model that commands wrong poses.
 
 ## Deploy: close the loop
 
