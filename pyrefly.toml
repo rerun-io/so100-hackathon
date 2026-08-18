@@ -10,3 +10,7 @@ site-package-path = [
     ".pixi/envs/dev/lib/python3.13/site-packages",
     ".pixi/envs/dev/lib/python3.13/site-packages/rerun_sdk",
 ]
+
+# pyrealsense2 lives only in the isolated realsense environment and is an untyped
+# C extension either way, so treat it as Any.
+replace-imports-with-any = ["pyrealsense2"]
