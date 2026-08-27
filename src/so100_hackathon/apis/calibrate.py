@@ -19,7 +19,11 @@ If a joint mirrors on a non-standard build, flip its entry in ``DRIVE_SIGNS``.
 The viewer shows two URDF arms: **target** (gray, the middle pose to match)
 and **live** (follows the real arm). Torque is off; move the arm by hand.
 Writes ``calibrations/<usb_id>.json`` in the portugal format that
-``log-so100`` loads.
+``log-so100`` loads — and DUAL-WRITES the same calibration in LeRobot's format
+into the HF cache (``~/.cache/huggingface/lerobot/calibration/...``), so
+LeRobot-ecosystem tools (e.g. the newt-starter-so101 deployment client) drive
+the arm with exactly the calibration the datasets were recorded with, no second
+``lerobot-calibrate`` sweep needed (``pixi run export-calibration`` re-emits it).
 
     pixi run calibrate-so100 leader --rr-config.connect
     pixi run calibrate-so100 follower --rr-config.connect
@@ -42,7 +46,15 @@ from rich.live import Live
 from rich.rule import Rule
 from rich.table import Table
 
-from so100_hackathon.calibration import DEFAULT_MOTOR_NAMES, TICKS_PER_REV, MotorCalibration, fallback_calibration, save_calibration
+from so100_hackathon.calibration import (
+    DEFAULT_MOTOR_NAMES,
+    TICKS_PER_REV,
+    MotorCalibration,
+    fallback_calibration,
+    lerobot_calibration_path,
+    save_calibration,
+    save_lerobot_calibration,
+)
 from so100_hackathon.console import console, error, info, note, simple_table, success, warn
 from so100_hackathon.feetech import FeetechBus, detect_arm_ports, usb_id_from_port
 from so100_hackathon.rerun_config import LiveViewerConfig
@@ -311,6 +323,10 @@ def main(config: CalibrateConfig) -> None:
 
     urdf_path = LEADER_URDF_PATH if is_leader else FOLLOWER_URDF_PATH
     target = UrdfArm.create("target", fallback_calibration(), rec=rec, urdf_path=urdf_path, translation=(0.0, 0.0, 0.0), color=(0.5, 0.5, 0.5))
+    # Pose the target right away: until its joint transforms arrive the static URDF
+    # meshes render as a disassembled pile.
+    rec.set_time("time", timestamp=time.time())
+    target.log_pose(rec, list(target.center_angles_rad))
     instruct(
         f"## Step 1 of 2 — match the target pose\n\n"
         f"Move your **{arm_label}** by hand to match the **gray target**: every joint at the middle of its range of motion. "
@@ -325,8 +341,6 @@ def main(config: CalibrateConfig) -> None:
     info(f"\ncalibrating {config.kind} {usb_id} on {port} -> {out_path}")
     note("in the viewer: GRAY arm = the target pose to match (a live model appears after step 1)")
     try:
-        rec.set_time("time", timestamp=time.time())
-        target.log_pose(rec, list(target.center_angles_rad))
         announce_phase("middle")
         console.print(Rule("Step 1 of 2 — match the middle pose"))
         input("  move the arm to the MIDDLE of its range of motion (match the gray target), then press Enter...")
@@ -385,6 +399,17 @@ def main(config: CalibrateConfig) -> None:
         except RuntimeError as err:
             # The sweep data is good; don't throw away the whole session over a flaky write.
             warn(f"writing servo position limits failed ({err}) — saving the calibration anyway; re-run if motion seems restricted")
+        # Read the servo-side homing offsets back for the LeRobot-format dual-write below.
+        # Our own JSON stores homing_offset=0 (the real offsets live in EEPROM), but the
+        # LeRobot file must mirror EEPROM exactly — see save_lerobot_calibration.
+        try:
+            homing_offsets = [bus.read_homing_offset(motor_id) for motor_id in bus.motor_ids]
+        except RuntimeError as err:
+            homing_offsets = None
+            warn(
+                f"reading homing offsets back failed ({err}) — skipping the LeRobot-format copy; "
+                f"emit it later with: pixi run export-calibration -- {config.kind}"
+            )
     finally:
         feed.stop()
         bus.close()
@@ -415,5 +440,13 @@ def main(config: CalibrateConfig) -> None:
     console.print(results)
 
     save_calibration(out_path, calibration, kind=config.kind, range_min=range_min, range_max=range_max)
+    # Dual-write: the same numbers in LeRobot's format, at the path LeRobot-ecosystem
+    # tools read from. An arm calibrated here can then be driven by the newt-starter /
+    # newt SDK without a second calibration — so the joint angles a checkpoint was
+    # trained on (our export) and the ones it commands at inference mean the same pose.
+    if homing_offsets is not None:
+        lerobot_path = lerobot_calibration_path(config.kind, usb_id)
+        save_lerobot_calibration(lerobot_path, DEFAULT_MOTOR_NAMES, bus.motor_ids, homing_offsets, range_min, range_max)
+        success(f"also wrote {lerobot_path} (LeRobot format — lerobot/newt tools find it with --robot.id={usb_id})")
     instruct(f"## {arm_label.capitalize()} calibrated ✓\n\nSaved to `{out_path}` (and to the servos themselves).")
     success(f"\nwrote {out_path} — verify with: pixi run log-so100")

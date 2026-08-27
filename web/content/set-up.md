@@ -1,10 +1,32 @@
 ---
 title: "Set up"
-order: 2
+order: 1
 ---
 
-Make sure the hardware actually works: ping, calibrate, teleoperate. Every step on
-this page runs in the embedded [Rerun](https://rerun.io/) viewer. Every step could be run in a terminal, see repo's READ.me for the complete list.
+
+## Install
+
+Everything runs through [Pixi](https://pixi.sh) — install it first if you don't have it:
+
+```bash
+curl -fsSL https://pixi.sh/install.sh | sh
+```
+
+Then clone the repo and install the environment:
+
+```bash
+git clone https://github.com/rerun-io/so100-hackathon.git
+cd so100-hackathon
+pixi install
+```
+
+That's it — every command in this dataset loop is a `pixi run ...` task from the repo root. Every step on this page runs in the embedded [Rerun](https://rerun.io/) viewer.
+
+<aside class="highlight">
+<p>Prefer doing everything from the terminal without this site? The repo's `README.md` is a
+compressed, CLI-only version of exactly these steps.</p>
+</aside>
+
 
 ## First: Start the local data server
 

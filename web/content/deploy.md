@@ -1,6 +1,6 @@
 ---
 title: "Deploy: close the loop"
-order: 6
+order: 5
 ---
 
 The last step is getting motion *back onto* the robot. The simplest deployment is replay:
@@ -28,15 +28,41 @@ Torque is released when it finishes. Keep a hand near the arm on first replay.
 
 A trained policy is the same loop with the trajectory computed live instead of read from
 the catalog: observe (joint state + camera frames) → infer an action chunk → drive the
-follower. LeRobot ships this loop ready-made for SO-100-class arms:
+follower.
+
+For your MolmoAct2 fine-tune (the Train page), the repo ships that loop. Start the
+inference server on the GPU box that trained the checkpoint:
 
 ```bash
-lerobot-record --robot.type=so100_follower \
-    --policy.path=outputs/act_my_task/checkpoints/last/pretrained_model \
-    --dataset.repo_id=<your-hf-user>/eval_my_task
+python tools/apps/policy_server_molmoact2.py --checkpoint <your-hf-user>/molmoact2_my_task --port 8080
 ```
 
-Note it *records while deploying* — evaluation runs are themselves episodes.
+then run the policy on the arm — **dry-run first, every time you change checkpoints**:
+
+```bash
+pixi run deploy-policy -- --task "pick up the ball" --server http://<gpu-box>:8080/act --dry-run
+pixi run deploy-policy -- --task "pick up the ball" --server http://<gpu-box>:8080/act
+```
+
+Dry-run streams the model's predictions to the viewer above without moving the arm, so
+you see what it *would* do. Live, every command is clamped to the calibrated joint range
+and to `--max-step-deg` per tick — a bad prediction jitters instead of slamming. The
+`--task` sentence is the command the policy follows; try the exact strings you recorded
+with first, then paraphrases. One warning: the public `allenai/MolmoAct2-SO100_101`
+checkpoint uses the older LeRobot v2.1 joint convention and will command wild poses on an
+arm calibrated with this repo — deploy checkpoints fine-tuned on your own export.
+
+## Every rollout is an episode
+
+Live runs *record while deploying*: each rollout is written to
+`recordings/molmoact2_eval/episode_NN.rrd` (rename with `--dataset`) with your `--task`
+sentence as its task and the tag *Needs review*, and registered to the catalog — the
+same take machinery as the Collect page. So the policy's autonomous runs land right next
+to your teleop data: open them from the viewer, query them on Refine
+(`pixi run query-dataset -- --dataset molmoact2_eval`), compare what the model did
+against what you demonstrated — and if a rollout is actually good, tag it *Good episode*
+and it can be exported and trained on like any other take. Pass `--dataset ""` to skip
+recording; dry runs are never recorded.
 
 ## Close the loop
 
